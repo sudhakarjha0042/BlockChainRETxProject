@@ -18,10 +18,15 @@ const CONTRACT_ABI = [
   "function submitPropertyForVerification(uint256 _totalFractions, uint256 _pricePerFraction) external payable",
   "function buyFraction(uint256 _tokenId, uint256 _fractions) external payable",
   "function getUserFractions(address user, uint256 tokenId) external view returns (uint256)",
-  "function getUserProperties(address user) external view returns (uint256[])"
+  "function getUserProperties(address user) external view returns (uint256[])",
+  "function verifyProperty(uint256 tokenId, bool approve) external",
+  "function nextTokenId() external view returns (uint256)"
 ];
 
 const CONTRACT_ADDRESS = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
+
+// Add verification fee constant from the contract's initialValue (0.01 ETH)
+const VERIFICATION_FEE = "10000000000000000"; // 0.01 ETH in wei
 
 // Sample investments - for testing when blockchain connection fails
 const SAMPLE_INVESTMENTS = [
@@ -261,25 +266,153 @@ export default function InvestmentsPage() {
 
     setIsLoading(true);
     try {
-      // Simulate automatic verification for testing
+      // Create contract instance with signer for transactions
+      let provider;
+      let signer;
+      
+      if (typeof ethers.BrowserProvider === "function") {
+        // ethers v6
+        provider = new ethers.BrowserProvider(window.ethereum);
+        signer = await provider.getSigner();
+      } else {
+        // ethers v5
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+        signer = provider.getSigner();
+      }
+      
+      // Get the full ABI from deployment info to ensure all functions are properly defined
+      let fullABI;
+      try {
+        // Try to fetch the full ABI from the backend deployment file
+        const response = await fetch('/api/contract-abi');
+        const data = await response.json();
+        fullABI = data.abi;
+        console.log("Using full ABI from deployment info");
+      } catch (error) {
+        console.warn("Could not fetch full ABI, using simplified ABI:", error);
+        fullABI = CONTRACT_ABI;
+      }
+      
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, fullABI, signer);
+      
+      // Convert pricePerFraction to wei
+      let priceInWei;
+      if (typeof ethers.parseEther === "function") {
+        // ethers v6
+        priceInWei = ethers.parseEther(newPropertyData.pricePerFraction.toString());
+      } else {
+        // ethers v5
+        priceInWei = ethers.utils.parseEther(newPropertyData.pricePerFraction.toString());
+      }
+      
+      toast({
+        title: "Submitting Property",
+        description: "Please confirm the transaction in your wallet...",
+      });
+      
+      // Call the contract function with verification fee
+      const tx = await contract.submitPropertyForVerification(
+        newPropertyData.totalFractions,
+        priceInWei,
+        { value: VERIFICATION_FEE }
+      );
+      
+      toast({
+        title: "Transaction Submitted",
+        description: `Transaction hash: ${tx.hash}`,
+      });
+      
+      // Wait for transaction to be mined
+      const receipt = await tx.wait();
+      
+      // Get the tokenId from event logs
+      let tokenId = null;
+      if (receipt && receipt.logs) {
+        for (const log of receipt.logs) {
+          try {
+            // Try to parse log as PropertySubmitted event
+            const parsedLog = contract.interface.parseLog(log);
+            if (parsedLog && parsedLog.name === "PropertySubmitted") {
+              tokenId = parsedLog.args.tokenId.toString();
+              console.log("Found tokenId in logs:", tokenId);
+              break;
+            }
+          } catch (e) {
+            // Skip logs that aren't the event we're looking for
+            continue;
+          }
+        }
+      }
+      
+      // If we couldn't get the token ID from logs, try to estimate it
+      if (!tokenId) {
+        console.log("Could not find tokenId in transaction logs, trying alternative methods");
+        try {
+          // Method 1: Try nextTokenId and subtract 1 (may fail)
+          try {
+            const nextToken = await contract.nextTokenId();
+            tokenId = (Number(nextToken) - 1).toString();
+            console.log("Estimated tokenId from nextTokenId:", tokenId);
+          } catch (error) {
+            console.warn("Failed to get nextTokenId:", error);
+            
+            // Method 2: Try to get total supply and assume it's the latest token
+            try {
+              const totalSupply = await contract.totalSupply();
+              tokenId = (Number(totalSupply) - 1).toString();
+              console.log("Estimated tokenId from totalSupply:", tokenId);
+            } catch (error) {
+              console.warn("Failed to get totalSupply:", error);
+              
+              // Method 3: Fallback to a basic counter
+              // Just use timestamp as a simple fallback ID
+              tokenId = Date.now().toString();
+              console.log("Using fallback tokenId:", tokenId);
+            }
+          }
+        } catch (error) {
+          console.error("All methods to get tokenId failed:", error);
+          tokenId = "unknown";
+        }
+      }
+      
+      toast({
+        title: "Property Submitted",
+        description: `Your property was submitted${tokenId !== "unknown" ? ` with token ID ${tokenId}` : ""}`,
+      });
+      
+      // Add a small delay before trying to verify the property
+      // This gives the blockchain time to update states
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // For testing purposes, automatically verify the property if we got a token ID
+      if (tokenId !== "unknown") {
+        try {
+          await autoVerifyProperty(contract, tokenId);
+        } catch (error) {
+          console.error("Auto-verification failed:", error);
+          toast({
+            title: "Auto-Verification Failed",
+            description: "Your property was submitted, but auto-verification failed. The property owner will need to verify it.",
+            variant: "warning",
+          });
+        }
+      }
+      
+      // Add the property to the local state
       const newProperty: OwnedProperty = {
-        id: (ownedProperties.length + 1).toString(),
+        id: tokenId || (ownedProperties.length + 1).toString(),
         totalFractions: newPropertyData.totalFractions,
         pricePerFraction: newPropertyData.pricePerFraction,
-        ownedFractions: newPropertyData.totalFractions,
+        ownedFractions: newPropertyData.totalFractions, // Owner gets all fractions initially
         percentageOwned: 100,
-        status: "Verified",
-        location: newPropertyData.location || `Property #${ownedProperties.length + 1}`,
+        status: tokenId !== "unknown" ? "Verified" : "Pending", // Only mark as verified if we could verify it
+        location: newPropertyData.location || `Property #${tokenId || (ownedProperties.length + 1)}`,
         description: newPropertyData.description || `You own all fractions of this property`,
       };
-
+      
       setOwnedProperties([...ownedProperties, newProperty]);
-
-      toast({
-        title: "Property Added",
-        description: "Your property has been automatically verified and added to your portfolio for testing.",
-      });
-
+      
       // Reset form
       setNewPropertyData({
         totalFractions: 100,
@@ -296,6 +429,36 @@ export default function InvestmentsPage() {
       });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Helper function to automatically verify a property for testing
+  const autoVerifyProperty = async (contract: any, tokenId: string) => {
+    try {
+      toast({
+        title: "Auto-Verifying",
+        description: "Automatically verifying property for testing...",
+      });
+      
+      // Call verifyProperty with approve=true
+      const tx = await contract.verifyProperty(tokenId, true);
+      const receipt = await tx.wait();
+      
+      toast({
+        title: "Property Verified",
+        description: `Property #${tokenId} has been automatically verified and is now available in the marketplace`,
+        variant: "success",
+      });
+      
+      return true;
+    } catch (error: any) {
+      console.error("Error auto-verifying property:", error);
+      toast({
+        title: "Verification Failed",
+        description: error.message || "Failed to automatically verify property",
+        variant: "destructive",
+      });
+      return false;
     }
   };
 

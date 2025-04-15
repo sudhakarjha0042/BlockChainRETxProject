@@ -9,89 +9,58 @@ import { WalletConnectModal } from "@/components/wallet-connect";
 import { Button } from "@/components/ui/button";
 import { ethers } from "ethers";
 import { useToast } from "@/components/ui/use-toast";
+import { useRouter } from "next/navigation";
 
-// Simple ABI for property NFT purchases
+// Updated ABI to match FractionalNFTMarketplace contract
 const CONTRACT_ABI = [
-  "function purchasePropertyNFT(uint256 propertyId, uint256 amount) public payable returns (bool)",
-  "function getPropertyPrice(uint256 propertyId) external view returns (uint256)"
+  "function buyFraction(uint256 _tokenId, uint256 _fractions) external payable",
+  "function getAllListings() external view returns (tuple(uint256 tokenId, address owner, uint256 totalFractions, uint256 pricePerFraction, uint256 availableFractions, uint8 status)[] memory)",
+  "function properties(uint256) external view returns (uint256 tokenId, address owner, uint256 totalFractions, uint256 pricePerFraction, uint256 availableFractions, uint8 status)",
+  "function balanceOf(address owner) external view returns (uint256)",
+  "function ownerOf(uint256 tokenId) external view returns (address)"
 ];
 
 // Contract address from backend .env
 const CONTRACT_ADDRESS = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
 
+// Updated property type to match contract structure
+interface BlockchainProperty {
+  tokenId: number;
+  owner: string;
+  totalFractions: number;
+  pricePerFraction: number;
+  availableFractions: number;
+  status: number; // 0: Pending, 1: Verified, 2: Rejected
+}
+
+// Sample properties as fallback when blockchain connection fails
 const SAMPLE_PROPERTIES: Property[] = [
   {
     id: "1",
-    image:
-      "https://images.pexels.com/photos/186077/pexels-photo-186077.jpeg?cs=srgb&dl=pexels-binyaminmellish-186077.jpg&fm=jpg",
-    estimatedValue: 5000000,
-    pricePerNFT: 20,
+    image: "https://images.pexels.com/photos/186077/pexels-photo-186077.jpeg",
+    estimatedValue: 500000,
+    pricePerNFT: 0.5,
     totalNFTs: 1000,
-    soldNFTs: 800,
-    location: "Downtown, City A",
-    type: "Commercial",
-    description: "Prime commercial property in the heart of downtown.",
+    soldNFTs: 400,
+    location: "Downtown Property #1",
+    type: "Fractional NFT",
+    description: "600/1000 fractions available",
+    owner: "0x1234567890123456789012345678901234567890",
+    availableFractions: 600,
   },
   {
     id: "2",
-    image:
-      "https://images.pexels.com/photos/186077/pexels-photo-186077.jpeg?cs=srgb&dl=pexels-binyaminmellish-186077.jpg&fm=jpg",
+    image: "https://images.pexels.com/photos/323780/pexels-photo-323780.jpeg",
     estimatedValue: 750000,
-    pricePerNFT: 15,
-    totalNFTs: 500,
+    pricePerNFT: 0.75,
+    totalNFTs: 1000,
     soldNFTs: 250,
-    location: "Suburb, City B",
-    type: "House",
-    description: "Spacious family home in a quiet suburban neighborhood.",
-  },
-  {
-    id: "3",
-    image:
-      "https://images.pexels.com/photos/186077/pexels-photo-186077.jpeg?cs=srgb&dl=pexels-binyaminmellish-186077.jpg&fm=jpg",
-    estimatedValue: 2000000,
-    pricePerNFT: 25,
-    totalNFTs: 800,
-    soldNFTs: 600,
-    location: "Beachfront, City C",
-    type: "Land",
-    description: "Rare beachfront land with development potential.",
-  },
-  {
-    id: "4",
-    image:
-      "https://images.pexels.com/photos/186077/pexels-photo-186077.jpeg?cs=srgb&dl=pexels-binyaminmellish-186077.jpg&fm=jpg",
-    estimatedValue: 3500000,
-    pricePerNFT: 30,
-    totalNFTs: 1200,
-    soldNFTs: 900,
-    location: "Tech Park, City D",
-    type: "Commercial",
-    description: "Modern office space in a thriving tech park.",
-  },
-  {
-    id: "5",
-    image:
-      "https://images.pexels.com/photos/186077/pexels-photo-186077.jpeg?cs=srgb&dl=pexels-binyaminmellish-186077.jpg&fm=jpg",
-    estimatedValue: 1200000,
-    pricePerNFT: 18,
-    totalNFTs: 600,
-    soldNFTs: 450,
-    location: "Historic District, City E",
-    type: "House",
-    description: "Charming historic home with modern amenities.",
-  },
-  {
-    id: "6",
-    image:
-      "https://images.pexels.com/photos/186077/pexels-photo-186077.jpeg?cs=srgb&dl=pexels-binyaminmellish-186077.jpg&fm=jpg",
-    estimatedValue: 8000000,
-    pricePerNFT: 40,
-    totalNFTs: 2000,
-    soldNFTs: 1500,
-    location: "Financial District, City F",
-    type: "Commercial",
-    description: "High-rise office building in the financial hub.",
-  },
+    location: "Suburb Property #2",
+    type: "Fractional NFT",
+    description: "750/1000 fractions available",
+    owner: "0x1234567890123456789012345678901234567890",
+    availableFractions: 750,
+  }
 ];
 
 export default function Marketplace() {
@@ -108,11 +77,119 @@ export default function Marketplace() {
   const [walletError, setWalletError] = React.useState<string>("");
   const [isTransacting, setIsTransacting] = React.useState(false);
   const [transaction, setTransaction] = React.useState<any>(null);
+  const [properties, setProperties] = React.useState<Property[]>(SAMPLE_PROPERTIES);
+  const [purchaseQuantity, setPurchaseQuantity] = React.useState<number>(1);
   const { toast } = useToast();
+  const router = useRouter();
 
   const isWalletConnected = !!walletAddress;
 
-  // Connect wallet function
+  // Improved property fetching with better error handling
+  const fetchProperties = React.useCallback(async () => {
+    if (!isWalletConnected) return;
+
+    try {
+      console.log("Attempting to fetch properties from blockchain...");
+      
+      let provider;
+      if (typeof ethers.BrowserProvider === "function") {
+        console.log("Using ethers v6 BrowserProvider");
+        provider = new ethers.BrowserProvider(window.ethereum);
+      } else {
+        console.log("Using ethers v5 Web3Provider");
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+      }
+      
+      console.log("Connecting to contract at address:", CONTRACT_ADDRESS);
+      console.log("Using ABI:", CONTRACT_ABI);
+      
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+      
+      // Test contract connection with a simple call first
+      try {
+        // Try to get the first property as a test
+        await contract.properties(1);
+        console.log("Contract connection test successful");
+      } catch (testError) {
+        console.error("Test property fetch failed:", testError);
+        throw new Error("Contract connection test failed");
+      }
+      
+      // Now try to get all listings
+      console.log("Fetching property listings from contract");
+      const listings = await contract.getAllListings();
+      console.log("Received listings:", listings);
+      
+      if (!listings || listings.length === 0) {
+        console.log("No property listings found on the blockchain");
+        toast({
+          title: "No Properties",
+          description: "No property listings found on the blockchain",
+          variant: "default",
+        });
+        return;
+      }
+      
+      // Convert blockchain data to Property format
+      console.log("Converting blockchain data to Property format");
+      const propertiesFromChain = listings.map((listing: BlockchainProperty) => {
+        try {
+          const formattedPrice = typeof ethers.formatEther === "function" 
+            ? ethers.formatEther(listing.pricePerFraction) 
+            : ethers.utils.formatEther(listing.pricePerFraction);
+          
+          return {
+            id: listing.tokenId.toString(),
+            image: "https://images.pexels.com/photos/186077/pexels-photo-186077.jpeg",
+            estimatedValue: Number(listing.totalFractions) * Number(formattedPrice),
+            pricePerNFT: Number(formattedPrice),
+            totalNFTs: Number(listing.totalFractions),
+            soldNFTs: Number(listing.totalFractions) - Number(listing.availableFractions),
+            location: "Property #" + listing.tokenId.toString(),
+            type: "Fractional NFT",
+            description: `${listing.availableFractions}/${listing.totalFractions} fractions available`,
+            owner: listing.owner,
+            availableFractions: Number(listing.availableFractions),
+          };
+        } catch (err) {
+          console.error("Error converting listing to Property format:", err, listing);
+          return null;
+        }
+      }).filter(Boolean);
+      
+      console.log("Converted properties:", propertiesFromChain);
+      
+      if (propertiesFromChain && propertiesFromChain.length > 0) {
+        setProperties(propertiesFromChain);
+        toast({
+          title: "Success",
+          description: `Loaded ${propertiesFromChain.length} properties from blockchain`,
+          variant: "default",
+        });
+      } else {
+        throw new Error("No valid properties found after conversion");
+      }
+    } catch (error) {
+      console.error("Error fetching properties:", error);
+      
+      toast({
+        title: "Error",
+        description: typeof error === 'object' && error !== null && 'message' in error 
+          ? `Failed to fetch properties: ${error.message}` 
+          : "Failed to fetch properties from blockchain. Check console for details.",
+        variant: "destructive",
+      });
+      
+      // Suggest using sample data for testing
+      toast({
+        title: "Tip",
+        description: "You can use 'Load Sample Data' to test with sample properties.",
+        variant: "default",
+      });
+    }
+  }, [isWalletConnected, toast]);
+
+  // Connect wallet function by calling a simpler method first
   const connectWallet = async () => {
     try {
       if (typeof window.ethereum === "undefined") {
@@ -122,7 +199,7 @@ export default function Marketplace() {
 
       let address;
       let provider;
-
+      
       // For both ethers v5 and v6
       if (typeof ethers.BrowserProvider === "function") {
         // ethers v6 approach
@@ -138,10 +215,10 @@ export default function Marketplace() {
         address = await signer.getAddress();
       }
 
-      console.log("Wallet connected:", address);
       setWalletAddress(address);
       setWalletError("");
-
+      console.log("Wallet connected:", address);
+      
       // Close modal if it was open
       if (showWalletConnect) {
         setShowWalletConnect(false);
@@ -152,17 +229,23 @@ export default function Marketplace() {
     }
   };
 
+  // Call fetchProperties when wallet is connected
+  React.useEffect(() => {
+    if (isWalletConnected) {
+      fetchProperties();
+    }
+  }, [isWalletConnected, fetchProperties]);
+
   // Function to purchase property NFTs
   const purchasePropertyNFT = async (property: Property, quantity: number = 1) => {
     if (!property || !isWalletConnected) return;
-
     setIsTransacting(true);
-
+    
     try {
       // Get provider and signer
       let provider;
       let signer;
-
+      
       if (typeof ethers.BrowserProvider === "function") {
         // ethers v6
         provider = new ethers.BrowserProvider(window.ethereum);
@@ -172,14 +255,14 @@ export default function Marketplace() {
         provider = new ethers.providers.Web3Provider(window.ethereum);
         signer = provider.getSigner();
       }
-
+      
       // Create contract instance
       const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
-
-      // Calculate price (price per NFT * quantity) - handle both v5 and v6 approaches
+      
+      // Calculate price (price per NFT * quantity)
       let totalPrice;
       if (typeof ethers.parseEther === "function") {
-        // ethers v6
+        // ethers v6 approach
         totalPrice = ethers.parseEther(
           (property.pricePerNFT * quantity).toString()
         );
@@ -191,29 +274,32 @@ export default function Marketplace() {
       } else {
         throw new Error("Unable to use ethers.parseEther or ethers.utils.parseEther");
       }
-
-      // Call the purchase function on the contract
-      const tx = await contract.purchasePropertyNFT(property.id, quantity, { value: totalPrice });
-
+      
+      // Call the buyFraction function on the contract
+      const tx = await contract.buyFraction(property.id, quantity, { value: totalPrice });
+      
       toast({
         title: "Transaction Submitted",
         description: `Transaction hash: ${tx.hash}`,
       });
-
+      
       // Wait for transaction to be mined
       const receipt = await tx.wait();
-
+      
       setTransaction({
         hash: receipt.transactionHash,
         status: receipt.status,
         blockNumber: receipt.blockNumber,
       });
-
+      
       toast({
         title: "Purchase Successful!",
-        description: `You have successfully purchased ${quantity} NFT(s) for property ${property.id}`,
+        description: `You have successfully purchased ${quantity} fraction(s) of property #${property.id}`,
         variant: "success",
       });
+      
+      // Refresh properties after purchase
+      fetchProperties();
 
       // Close the property modal
       setSelectedProperty(null);
@@ -232,18 +318,34 @@ export default function Marketplace() {
   // Handle buy now action
   const handleBuyNow = () => {
     if (!selectedProperty) return;
-
+    
     if (isWalletConnected) {
       // Process actual blockchain transaction
-      purchasePropertyNFT(selectedProperty, 1);
+      purchasePropertyNFT(selectedProperty, purchaseQuantity);
     } else {
       // Show wallet connect modal if not connected
       setShowWalletConnect(true);
     }
   };
 
-  const filteredProperties = SAMPLE_PROPERTIES.filter((property) => {
+  // Navigate to investments page
+  const goToInvestments = () => {
+    router.push("/investments");
+  };
+
+  // Enhanced loadSampleData function to provide better feedback
+  const loadSampleData = () => {
+    setProperties(SAMPLE_PROPERTIES);
+    toast({
+      title: "Sample Data Loaded",
+      description: `Loaded ${SAMPLE_PROPERTIES.length} sample properties for testing`,
+      variant: "default",
+    });
+  };
+
+  const filteredProperties = properties.filter((property) => {
     return (
+      property.availableFractions > 0 && // Only show properties with available fractions
       (!filters.area || property.location.includes(filters.area)) &&
       (filters.propertyTypes.length === 0 || filters.propertyTypes.includes(property.type)) &&
       property.estimatedValue >= filters.priceRange[0] &&
@@ -256,13 +358,17 @@ export default function Marketplace() {
   return (
     <div className="flex min-h-screen bg-background">
       <SidebarFilters filters={filters} onFilterChange={setFilters} />
+      
       <main className="flex-1 overflow-auto relative">
-        {/* Wallet Connection Button in top right corner */}
-        <div className="absolute top-4 right-4 z-10">
+        {/* Wallet Connection and My Investments Buttons */}
+        <div className="absolute top-4 right-4 z-10 flex gap-2">
           {isWalletConnected ? (
-            <Button variant="outline" className="text-xs">
-              {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
-            </Button>
+            <>
+              <Button onClick={goToInvestments} className="mr-2">My Investments</Button>
+              <Button variant="outline" className="text-xs">
+                {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
+              </Button>
+            </>
           ) : (
             <Button onClick={connectWallet}>Connect Wallet</Button>
           )}
@@ -281,6 +387,13 @@ export default function Marketplace() {
             </div>
           )}
 
+          {/* Add a debug button for loading sample data during development */}
+          {process.env.NODE_ENV !== 'production' && (
+            <Button onClick={loadSampleData} variant="outline" className="mb-4">
+              Load Sample Data
+            </Button>
+          )}
+
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {filteredProperties.length > 0 ? (
               filteredProperties.map((property) => (
@@ -291,7 +404,7 @@ export default function Marketplace() {
                 />
               ))
             ) : (
-              <p>No properties match the selected filters.</p>
+              <p>No properties match the selected filters or are available for purchase.</p>
             )}
           </div>
         </div>
@@ -304,6 +417,9 @@ export default function Marketplace() {
         onBuyNow={handleBuyNow}
         walletConnected={isWalletConnected}
         isTransacting={isTransacting}
+        quantity={purchaseQuantity}
+        onQuantityChange={setPurchaseQuantity}
+        maxQuantity={selectedProperty?.availableFractions || 0}
       />
 
       {showWalletConnect && (

@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { X } from 'lucide-react'
+import { X, Loader2 } from 'lucide-react'
 import { Property } from '../types/marketplace'
 import { Button } from '@/components/ui'
 import {
@@ -19,6 +19,7 @@ interface PropertyDetailModalProps {
   onClose: () => void
   onBuyNow: () => void
   walletConnected: boolean
+  isTransacting?: boolean
 }
 
 export function PropertyDetailModal({
@@ -27,6 +28,7 @@ export function PropertyDetailModal({
   onClose,
   onBuyNow,
   walletConnected,
+  isTransacting = false,
 }: PropertyDetailModalProps) {
   if (!property) return null
 
@@ -84,11 +86,23 @@ export function PropertyDetailModal({
                 {property.description}
               </p>
               <div className="mt-6 flex justify-end gap-2">
-                <Button variant="outline" onClick={onClose}>
+                <Button variant="outline" onClick={onClose} disabled={isTransacting}>
                   Close
                 </Button>
-                <Button onClick={onBuyNow}>
-                  {walletConnected ? "Buy Now" : "Connect Wallet to Buy"}
+                <Button 
+                  onClick={onBuyNow} 
+                  disabled={isTransacting}
+                >
+                  {isTransacting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Processing...
+                    </>
+                  ) : walletConnected ? (
+                    "Buy Now"
+                  ) : (
+                    "Connect Wallet to Buy"
+                  )}
                 </Button>
               </div>
             </div>

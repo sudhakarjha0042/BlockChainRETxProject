@@ -9,3 +9,6 @@ module.exports = {
     },
   },
 };
+
+// npx hardhat run scripts/deploy.js --network localhost
+// npx hardhat node

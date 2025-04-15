@@ -8,13 +8,16 @@ const nextConfig = {
   // Add images configuration
   images: {
     domains: ['images.pexels.com'],
+    remotePatterns: [
+      // If you have any remote patterns, add them here
+    ],
   },
   
   reactStrictMode: true,
   
   webpack: (config, { isServer }) => {
-    // Resolve './lib/text-encoding' to our mock implementation
-    config.resolve.alias['./lib/text-encoding'] = path.resolve(__dirname, 'src/lib/text-encoding-mock.js');
+    // Resolve './lib/text-encoding' to our implementation
+    config.resolve.alias['./lib/text-encoding'] = path.resolve(__dirname, 'src/lib/text-encoding.js');
     
     // Suppress critical dependency warnings for gun/sea.js
     config.module.rules.push({

@@ -1,25 +1,35 @@
-import Gun from 'gun';
-import 'gun/sea'; // Security, Encryption, Authorization module
-import 'gun/axe'; // Relay mesh networking optimization
-import { TextEncoder, TextDecoder } from 'text-encoding'; // Polyfill for SEA
+import 'text-encoding-polyfill';
 
-// Polyfill for SEA compatibility
-if (typeof window !== 'undefined') {
-  if (!window.TextEncoder) {
-    window.TextEncoder = TextEncoder;
-  }
-  if (!window.TextDecoder) {
-    window.TextDecoder = TextDecoder;
-  }
+// Set up TextEncoder and TextDecoder polyfills globally
+if (typeof global !== 'undefined') {
+  const textEncoding = require('../lib/text-encoding-mock');
+  if (!global.TextEncoder) global.TextEncoder = textEncoding.TextEncoder;
+  if (!global.TextDecoder) global.TextDecoder = textEncoding.TextDecoder;
 }
 
-// Initialize Gun instance
-const gun = Gun({
-  peers: ['http://localhost:8765/gun'], // Add more relay servers if needed
-});
+// Conditional import for Gun to avoid SSR issues
+let Gun;
+let gun;
+let user;
 
-// Ensure that SEA (security) works with sessions properly
-export const user = gun.user().recall({ sessionStorage: true });
+// Only import and initialize Gun on the client-side
+if (typeof window !== 'undefined') {
+  Gun = require('gun');
+  require('gun/sea');
+  require('gun/axe');
+  
+  // Initialize Gun instance
+  gun = Gun({
+    peers: ['http://localhost:8765/gun'],
+  });
+  
+  // Ensure that SEA (security) works with sessions properly
+  user = gun.user().recall({ sessionStorage: true });
+} else {
+  // Mock Gun for server-side rendering
+  gun = {};
+  user = { recall: () => {} };
+}
 
-// Export the Gun instance
+export { user };
 export default gun;

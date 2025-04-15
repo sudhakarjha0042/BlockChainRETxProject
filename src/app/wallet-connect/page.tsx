@@ -37,13 +37,24 @@ export default function WalletConnect() {
       }
 
       console.log("Requesting accounts...");
-      const provider = new ethers.providers.Web3Provider(
-        window.ethereum,
-        "any"
-      );
-      const accounts = await provider.send("eth_requestAccounts", []);
-      const signer = provider.getSigner();
-      const address = await signer.getAddress();
+      // Create provider using the appropriate ethers version method
+      let signer;
+      let address;
+      
+      // This works for both ethers v5 and v6
+      if (typeof ethers.BrowserProvider === 'function') {
+        // ethers v6 approach
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        signer = await provider.getSigner();
+        address = await signer.getAddress();
+      } else {
+        // ethers v5 approach
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        signer = provider.getSigner();
+        address = await signer.getAddress();
+      }
 
       console.log("Wallet connected:", address);
       setWalletAddress(address);

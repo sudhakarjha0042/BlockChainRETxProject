@@ -18,6 +18,7 @@ interface PropertyDetailModalProps {
   isOpen: boolean
   onClose: () => void
   onBuyNow: () => void
+  walletConnected: boolean
 }
 
 export function PropertyDetailModal({
@@ -25,6 +26,7 @@ export function PropertyDetailModal({
   isOpen,
   onClose,
   onBuyNow,
+  walletConnected,
 }: PropertyDetailModalProps) {
   if (!property) return null
 
@@ -81,12 +83,12 @@ export function PropertyDetailModal({
               <p className="text-sm text-muted-foreground">
                 {property.description}
               </p>
-              <div className="space-y-2">
-                <Button className="w-full" onClick={onBuyNow}>
-                  Buy Now
+              <div className="mt-6 flex justify-end gap-2">
+                <Button variant="outline" onClick={onClose}>
+                  Close
                 </Button>
-                <Button variant="outline" className="w-full">
-                  View More
+                <Button onClick={onBuyNow}>
+                  {walletConnected ? "Buy Now" : "Connect Wallet to Buy"}
                 </Button>
               </div>
             </div>

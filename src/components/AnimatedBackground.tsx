@@ -1,73 +1,72 @@
-'use client'
+'use client'; // Mark this as a client component
 
-import { motion } from 'framer-motion'
-import { useState } from 'react'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
+
+interface Particle {
+  x: number;
+  y: number;
+}
 
 const AnimatedBackground = () => {
-  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
-
+  const [dimensions, setDimensions] = useState({
+    width: 1000, // Default fallback values
+    height: 600
+  });
+  
+  const [particles, setParticles] = useState<Particle[]>([]);
+  const numParticles = 50;
+  
+  // Initialize particles only on the client side
   useEffect(() => {
-    const updateMousePosition = (e: MouseEvent) => {
-      setMousePosition({ x: e.clientX, y: e.clientY })
-    }
-
-    window.addEventListener('mousemove', updateMousePosition)
-
-    return () => {
-      window.removeEventListener('mousemove', updateMousePosition)
-    }
-  }, [])
-
+    // Update dimensions based on window size
+    setDimensions({
+      width: window.innerWidth,
+      height: window.innerHeight
+    });
+    
+    // Initialize particles
+    const initialParticles = Array.from({ length: numParticles }).map(() => ({
+      x: Math.random() * window.innerWidth,
+      y: Math.random() * window.innerHeight
+    }));
+    
+    setParticles(initialParticles);
+    
+    // Optional: Add resize listener
+    const handleResize = () => {
+      setDimensions({
+        width: window.innerWidth,
+        height: window.innerHeight
+      });
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+  
   return (
-    <div className="fixed inset-0 -z-10 bg-gradient-to-br from-blue-100 to-indigo-200 dark:from-gray-900 dark:to-gray-800 overflow-hidden">
-      <motion.div
-        className="absolute inset-0"
-        animate={{
-          background: [
-            `radial-gradient(600px at ${mousePosition.x}px ${mousePosition.y}px, rgba(29, 78, 216, 0.15), transparent 80%)`,
-          ],
-        }}
-      />
-      {[...Array(3)].map((_, i) => (
-        <motion.div
-          key={i}
-          className="absolute bottom-0 left-0 right-0 h-[20vh] bg-blue-500 opacity-10"
-          initial={{ y: "100%" }}
-          animate={{
-            y: ["100%", "0%", "100%"],
-          }}
-          transition={{
-            duration: 10 + i * 2,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-          style={{
-            filter: "blur(8px)",
-          }}
-        />
-      ))}
-      {[...Array(20)].map((_, i) => (
+    <div className="fixed inset-0 z-0 overflow-hidden">
+      {particles.map((particle, i) => (
         <motion.div
           key={i}
           className="absolute h-2 w-2 rounded-full bg-blue-500 opacity-50"
-          initial={{ x: Math.random() * window.innerWidth, y: Math.random() * window.innerHeight }}
+          initial={{ x: particle.x, y: particle.y }}
           animate={{
-            x: Math.random() * window.innerWidth,
-            y: Math.random() * window.innerHeight,
-            scale: [1, 1.5, 1],
-            opacity: [0.5, 1, 0.5],
+            x: Math.random() * dimensions.width,
+            y: Math.random() * dimensions.height,
           }}
           transition={{
             duration: Math.random() * 10 + 20,
+            ease: "linear",
             repeat: Infinity,
-            repeatType: "reverse",
+            repeatType: "reverse"
           }}
         />
       ))}
     </div>
-  )
-}
+  );
+};
 
-export default AnimatedBackground
+export default AnimatedBackground;
 

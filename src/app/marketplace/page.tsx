@@ -5,8 +5,9 @@ import { Property, FilterState } from "@/types/marketplace";
 import { SidebarFilters } from "@/components/sidebar-filters";
 import { PropertyCard } from "@/components/property-card";
 import { PropertyDetailModal } from "@/components/property-modal-detail";
-// Correctly import the named export WalletConnectModal
 import { WalletConnectModal } from "@/components/wallet-connect";
+import { Button } from "@/components/ui/button";
+import { ethers } from "ethers";
 
 const SAMPLE_PROPERTIES: Property[] = [
   {
@@ -93,8 +94,62 @@ export default function Marketplace() {
 
   const [selectedProperty, setSelectedProperty] = React.useState<Property | null>(null);
   const [showWalletConnect, setShowWalletConnect] = React.useState(false);
+  const [walletAddress, setWalletAddress] = React.useState<string>("");
+  const [walletError, setWalletError] = React.useState<string>("");
 
-  const handleBuyNow = () => setShowWalletConnect(true);
+  const isWalletConnected = !!walletAddress;
+
+  // Handle wallet connection
+  const connectWallet = async () => {
+    try {
+      if (typeof window.ethereum === "undefined") {
+        setWalletError("MetaMask is not installed. Please install it from metamask.io");
+        return;
+      }
+
+      let address;
+
+      // For both ethers v5 and v6
+      if (typeof ethers.BrowserProvider === "function") {
+        // ethers v6 approach
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        const signer = await provider.getSigner();
+        address = await signer.getAddress();
+      } else {
+        // ethers v5 approach
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        const signer = provider.getSigner();
+        address = await signer.getAddress();
+      }
+
+      console.log("Wallet connected:", address);
+      setWalletAddress(address);
+      setWalletError("");
+
+      // Close modal if it was open
+      if (showWalletConnect) {
+        setShowWalletConnect(false);
+      }
+    } catch (err) {
+      console.error(err);
+      setWalletError(err instanceof Error ? err.message : "Failed to connect wallet");
+    }
+  };
+
+  // Handle buy now action - only process if wallet is connected
+  const handleBuyNow = () => {
+    if (isWalletConnected) {
+      // Directly proceed with purchase logic
+      console.log("Processing purchase with connected wallet:", walletAddress);
+      // Add your purchase logic here
+      alert(`Purchase initiated with wallet: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`);
+    } else {
+      // Show wallet connect modal if not connected
+      setShowWalletConnect(true);
+    }
+  };
 
   const filteredProperties = SAMPLE_PROPERTIES.filter((property) => {
     return (
@@ -110,7 +165,19 @@ export default function Marketplace() {
   return (
     <div className="flex min-h-screen bg-background">
       <SidebarFilters filters={filters} onFilterChange={setFilters} />
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto relative">
+        {/* Wallet Connection Button in top right corner */}
+        <div className="absolute top-4 right-4 z-10">
+          {isWalletConnected ? (
+            <Button variant="outline" className="text-xs">
+              {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
+            </Button>
+          ) : (
+            <Button onClick={connectWallet}>Connect Wallet</Button>
+          )}
+          {walletError && <p className="text-red-500 text-xs mt-1">{walletError}</p>}
+        </div>
+
         <div className="container mx-auto py-8 px-4">
           <h1 className="mb-6 text-3xl font-bold">Property Marketplace</h1>
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -134,10 +201,15 @@ export default function Marketplace() {
         isOpen={!!selectedProperty}
         onClose={() => setSelectedProperty(null)}
         onBuyNow={handleBuyNow}
+        walletConnected={isWalletConnected}
       />
 
-      {/* Use the correct component name WalletConnectModal */}
-      {showWalletConnect && <WalletConnectModal onClose={() => setShowWalletConnect(false)} />}
+      {showWalletConnect && (
+        <WalletConnectModal 
+          onClose={() => setShowWalletConnect(false)} 
+          onConnect={connectWallet}
+        />
+      )}
     </div>
   );
 }

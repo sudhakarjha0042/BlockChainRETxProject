@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui";
 import {
@@ -12,11 +11,10 @@ import {
 
 interface WalletConnectModalProps {
   onClose: () => void;
+  onConnect: () => void;
 }
 
-export function WalletConnectModal({ onClose }: WalletConnectModalProps) {
-  const router = useRouter();
-
+export function WalletConnectModal({ onClose, onConnect }: WalletConnectModalProps) {
   const wallets = [
     { name: "MetaMask", icon: "🦊" },
     { name: "Coinbase Wallet", icon: "💰" },
@@ -25,12 +23,10 @@ export function WalletConnectModal({ onClose }: WalletConnectModalProps) {
 
   const handleConnect = (walletName: string) => {
     if (walletName === "MetaMask") {
-      console.log("MetaMask selected in modal...");
-      router.push("../wallet-connect"); // Navigate to wallet-connect.tsx
-      onClose(); // Close modal after selection
+      // Call the onConnect function passed from the parent
+      onConnect();
     } else {
-      console.log(`Connecting to ${walletName}...`);
-      onClose();
+      console.log(`${walletName} integration not implemented yet`);
     }
   };
 

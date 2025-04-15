@@ -23,7 +23,7 @@ const CONTRACT_ABI = [
   "function nextTokenId() external view returns (uint256)"
 ];
 
-const CONTRACT_ADDRESS = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
+const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 
 // Add verification fee constant from the contract's initialValue (0.01 ETH)
 const VERIFICATION_FEE = "10000000000000000"; // 0.01 ETH in wei

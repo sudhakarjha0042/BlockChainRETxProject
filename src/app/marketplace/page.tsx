@@ -292,6 +292,9 @@ export default function Marketplace() {
         blockNumber: receipt.blockNumber,
       });
       
+      // Record the purchase in localStorage to help investments page find it
+      recordPurchase(property.id, quantity);
+      
       toast({
         title: "Purchase Successful!",
         description: `You have successfully purchased ${quantity} fraction(s) of property #${property.id}`,
@@ -313,6 +316,18 @@ export default function Marketplace() {
     } finally {
       setIsTransacting(false);
     }
+  };
+
+  // Add a function to record purchases in localStorage
+  const recordPurchase = (propertyId: string, fractions: number) => {
+    if (!walletAddress) return;
+    
+    const storageKey = `fraction_ownership_${walletAddress.toLowerCase()}_${propertyId}`;
+    const existingOwnership = localStorage.getItem(storageKey);
+    const newOwnership = existingOwnership ? (parseInt(existingOwnership) + fractions) : fractions;
+    
+    localStorage.setItem(storageKey, newOwnership.toString());
+    console.log(`Recorded purchase of ${fractions} fractions of property #${propertyId}`);
   };
 
   // Handle buy now action

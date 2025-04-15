@@ -9,26 +9,29 @@ import { Slider } from "@/components/ui/slider";
 import { useToast } from "@/components/ui/use-toast";
 import { ethers } from "ethers";
 import { useRouter } from "next/navigation";
+import { Loader2 } from "lucide-react";
 
-// Fractional NFT Marketplace ABI for investment operations
-const CONTRACT_ABI = [
+// Import the full ABI from deploymentInfo.json to ensure compatibility
+// We'll create a compatibility ABI with only the functions we use
+const COMPATIBLE_ABI = [
   "function balanceOf(address owner) external view returns (uint256)",
   "function tokenOfOwnerByIndex(address owner, uint256 index) external view returns (uint256)",
   "function properties(uint256) external view returns (uint256 tokenId, address owner, uint256 totalFractions, uint256 pricePerFraction, uint256 availableFractions, uint8 status)",
+  "function totalSupply() external view returns (uint256)",
+  "function ownerOf(uint256 tokenId) external view returns (address)",
   "function submitPropertyForVerification(uint256 _totalFractions, uint256 _pricePerFraction) external payable",
-  "function buyFraction(uint256 _tokenId, uint256 _fractions) external payable",
-  "function getUserFractions(address user, uint256 tokenId) external view returns (uint256)",
-  "function getUserProperties(address user) external view returns (uint256[])",
   "function verifyProperty(uint256 tokenId, bool approve) external",
-  "function nextTokenId() external view returns (uint256)"
+  "function nextTokenId() external view returns (uint256)",
+  "function getAllListings() external view returns (tuple(uint256 tokenId, address owner, uint256 totalFractions, uint256 pricePerFraction, uint256 availableFractions, uint8 status)[] memory)"
 ];
 
+// Contract address from backend .env
 const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 
 // Add verification fee constant from the contract's initialValue (0.01 ETH)
 const VERIFICATION_FEE = "10000000000000000"; // 0.01 ETH in wei
 
-// Sample investments - for testing when blockchain connection fails
+// Sample investments for testing when blockchain connection fails
 const SAMPLE_INVESTMENTS = [
   {
     id: "1",
@@ -76,10 +79,12 @@ export default function InvestmentsPage() {
   const [selectedProperty, setSelectedProperty] = React.useState<OwnedProperty | null>(null);
   const [fractionsToSell, setFractionsToSell] = React.useState(0);
   const [newPrice, setNewPrice] = React.useState(0);
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
+  const [manualPropertyId, setManualPropertyId] = React.useState("");
+  const [isCheckingProperty, setIsCheckingProperty] = React.useState(false);
   const { toast } = useToast();
   const router = useRouter();
 
-  // Connect wallet and load user investments
   const connectWallet = async () => {
     try {
       if (typeof window.ethereum === "undefined") {
@@ -95,13 +100,11 @@ export default function InvestmentsPage() {
       let provider;
 
       if (typeof ethers.BrowserProvider === "function") {
-        // ethers v6
         provider = new ethers.BrowserProvider(window.ethereum);
         await provider.send("eth_requestAccounts", []);
         const signer = await provider.getSigner();
         address = await signer.getAddress();
       } else {
-        // ethers v5
         provider = new ethers.providers.Web3Provider(window.ethereum);
         await provider.send("eth_requestAccounts", []);
         const signer = provider.getSigner();
@@ -111,7 +114,6 @@ export default function InvestmentsPage() {
       console.log("Wallet connected:", address);
       setWalletAddress(address);
       
-      // Fetch owned properties
       await fetchOwnedProperties(address, provider);
       
     } catch (err) {
@@ -128,107 +130,126 @@ export default function InvestmentsPage() {
     setIsLoading(true);
     try {
       console.log("Fetching owned properties for address:", address);
-      const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+      console.log("Using contract address:", CONTRACT_ADDRESS);
       
-      // Try to get the user's properties using the getUserProperties function
-      // This assumes the contract has this function which returns token IDs owned by the user
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, COMPATIBLE_ABI, provider);
+      
+      try {
+        await contract.totalSupply();
+        console.log("Contract connection successful");
+      } catch (testError) {
+        console.error("Contract connection test failed:", testError);
+        throw new Error("Failed to connect to contract. Check ABI and address.");
+      }
+      
       let userProperties: OwnedProperty[] = [];
       
       try {
-        // First, try to get user properties with getUserProperties function (if implemented in contract)
-        const propertyIds = await contract.getUserProperties(address);
-        console.log("User property IDs:", propertyIds);
-        
-        // Process each property
-        for (const tokenId of propertyIds) {
-          const property = await contract.properties(tokenId);
-          const ownedFractions = await contract.getUserFractions(address, tokenId);
-          
-          const percentageOwned = (Number(ownedFractions) / Number(property.totalFractions)) * 100;
-          
-          userProperties.push({
-            id: tokenId.toString(),
-            totalFractions: Number(property.totalFractions),
-            pricePerFraction: Number(ethers.formatEther ? 
-                                     ethers.formatEther(property.pricePerFraction) : 
-                                     ethers.utils.formatEther(property.pricePerFraction)),
-            ownedFractions: Number(ownedFractions),
-            percentageOwned: percentageOwned,
-            status: ["Pending", "Verified", "Rejected"][property.status],
-            location: `Property #${tokenId}`,
-            description: `You own ${ownedFractions} of ${property.totalFractions} fractions`,
-          });
-        }
-      } catch (err) {
-        console.warn("getUserProperties failed, falling back to balanceOf method:", err);
-        
-        // Fallback method: Use balanceOf and tokenOfOwnerByIndex (ERC721 standard)
+        console.log("Checking if user owns any property tokens directly...");
         const balance = await contract.balanceOf(address);
         const numTokens = Number(balance);
+        console.log(`User directly owns ${numTokens} property tokens`);
         
-        console.log(`User owns ${numTokens} properties via ERC721 tokens`);
-        
-        // For each token, get the property details
         for (let i = 0; i < numTokens; i++) {
           try {
             const tokenId = await contract.tokenOfOwnerByIndex(address, i);
-            const property = await contract.properties(tokenId);
+            console.log(`User owns token ID: ${tokenId}`);
             
-            // Try to get the user's fractions for this property
-            let ownedFractions;
-            try {
-              ownedFractions = await contract.getUserFractions(address, tokenId);
-              ownedFractions = Number(ownedFractions);
-            } catch (fractionErr) {
-              console.warn(`Could not get fractions for token ${tokenId}:`, fractionErr);
-              ownedFractions = 1; // Fallback: assume at least 1 fraction owned
+            const property = await contract.properties(tokenId);
+            const tokenIdStr = tokenId.toString();
+            
+            let pricePerFraction;
+            if (typeof ethers.formatEther === "function") {
+              pricePerFraction = Number(ethers.formatEther(property.pricePerFraction));
+            } else {
+              pricePerFraction = Number(ethers.utils.formatEther(property.pricePerFraction));
             }
             
-            const percentageOwned = (ownedFractions / Number(property.totalFractions)) * 100;
-            
             userProperties.push({
-              id: tokenId.toString(),
+              id: tokenIdStr,
               totalFractions: Number(property.totalFractions),
-              pricePerFraction: Number(ethers.formatEther ? 
-                                      ethers.formatEther(property.pricePerFraction) : 
-                                      ethers.utils.formatEther(property.pricePerFraction)),
-              ownedFractions: ownedFractions,
-              percentageOwned: percentageOwned,
-              status: ["Pending", "Verified", "Rejected"][property.status],
-              location: `Property #${tokenId}`,
-              description: `You own ${ownedFractions} of ${property.totalFractions} fractions`,
+              pricePerFraction: pricePerFraction,
+              ownedFractions: Number(property.availableFractions),
+              percentageOwned: (Number(property.availableFractions) / Number(property.totalFractions)) * 100,
+              status: ["Pending", "Verified", "Rejected"][property.status] || "Unknown",
+              location: `Property #${tokenIdStr}`,
+              description: `You own ${property.availableFractions} of ${property.totalFractions} fractions`,
             });
-          } catch (tokenErr) {
-            console.error(`Error processing token at index ${i}:`, tokenErr);
+          } catch (err) {
+            console.error(`Error processing token at index ${i}:`, err);
           }
+        }
+      } catch (err) {
+        console.warn("Error checking direct token ownership:", err);
+      }
+      
+      if (userProperties.length === 0) {
+        try {
+          console.log("Checking marketplace listings for fractional ownership...");
+          const totalSupply = await contract.totalSupply();
+          
+          for (let tokenId = 1; tokenId <= Number(totalSupply); tokenId++) {
+            try {
+              const primaryOwner = await contract.ownerOf(tokenId);
+              const isPrimaryOwner = primaryOwner.toLowerCase() === address.toLowerCase();
+              
+              const property = await contract.properties(tokenId);
+              
+              const storageKey = `fraction_ownership_${address.toLowerCase()}_${tokenId}`;
+              const storedOwnership = localStorage.getItem(storageKey);
+              let ownedFractions = 0;
+              
+              if (isPrimaryOwner) {
+                ownedFractions = Number(property.availableFractions);
+              } else if (storedOwnership) {
+                ownedFractions = parseInt(storedOwnership);
+              }
+              
+              if (ownedFractions > 0) {
+                console.log(`Found ownership for property #${tokenId}: ${ownedFractions} fractions`);
+                
+                let pricePerFraction;
+                if (typeof ethers.formatEther === "function") {
+                  pricePerFraction = Number(ethers.formatEther(property.pricePerFraction));
+                } else {
+                  pricePerFraction = Number(ethers.utils.formatEther(property.pricePerFraction));
+                }
+                
+                userProperties.push({
+                  id: tokenId.toString(),
+                  totalFractions: Number(property.totalFractions),
+                  pricePerFraction: pricePerFraction,
+                  ownedFractions: ownedFractions,
+                  percentageOwned: (ownedFractions / Number(property.totalFractions)) * 100,
+                  status: ["Pending", "Verified", "Rejected"][property.status] || "Unknown",
+                  location: `Property #${tokenId}`,
+                  description: `You own ${ownedFractions} of ${property.totalFractions} fractions`,
+                });
+              }
+            } catch (err) {
+              console.log(`Property #${tokenId} doesn't exist or error:`, err);
+            }
+          }
+        } catch (err) {
+          console.warn("Error checking all properties:", err);
         }
       }
       
       if (userProperties.length > 0) {
-        console.log("Found user properties:", userProperties);
+        console.log("Final properties found:", userProperties);
         setOwnedProperties(userProperties);
         toast({
-          title: "Success",
+          title: "Properties Found",
           description: `Found ${userProperties.length} properties in your portfolio`,
+          variant: "success",
         });
       } else {
-        console.log("No properties found, checking recent transactions...");
-        
-        // If the blockchain query returned no properties but we know there should be some
-        // (e.g., user just made a purchase in the marketplace), check transaction history
-        const recentBlockNumber = await provider.getBlockNumber();
-        const startBlock = Math.max(0, recentBlockNumber - 1000); // Look back 1000 blocks
-        
-        toast({
-          title: "Searching transactions",
-          description: "Looking for recent property purchases...",
-        });
-        
-        // Use a sample for now since we can't easily scan transaction history in this context
+        console.log("No properties found via automatic detection");
         setOwnedProperties([]);
         toast({
-          title: "No properties found",
-          description: "No properties found in your wallet. Try loading sample data for testing.",
+          title: "No Properties Found",
+          description: "No properties found automatically. Try using the 'Lookup Property' option below.",
+          variant: "warning",
         });
       }
     } catch (error) {
@@ -236,25 +257,129 @@ export default function InvestmentsPage() {
       setOwnedProperties([]);
       toast({
         title: "Error",
-        description: "Failed to fetch your properties from blockchain. Try loading sample data.",
+        description: "Failed to fetch your properties. Try the manual lookup option below.",
         variant: "destructive",
       });
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
-
-  // Add function to load sample investment data for testing
-  const loadSampleInvestments = () => {
-    setOwnedProperties(SAMPLE_INVESTMENTS);
-    toast({
-      title: "Sample Data Loaded",
-      description: "Loaded sample investment data for testing",
-    });
+  
+  const checkPropertyById = async () => {
+    if (!walletAddress || !manualPropertyId) {
+      toast({
+        title: "Error",
+        description: "Please connect your wallet and enter a property ID",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    setIsCheckingProperty(true);
+    
+    try {
+      const propertyId = parseInt(manualPropertyId);
+      if (isNaN(propertyId) || propertyId <= 0) {
+        throw new Error("Please enter a valid property ID (positive number)");
+      }
+      
+      let provider;
+      if (typeof ethers.BrowserProvider === "function") {
+        provider = new ethers.BrowserProvider(window.ethereum);
+      } else {
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+      }
+      
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, COMPATIBLE_ABI, provider);
+      
+      const property = await contract.properties(propertyId);
+      console.log(`Property #${propertyId} details:`, property);
+      
+      const isPrimaryOwner = property.owner.toLowerCase() === walletAddress.toLowerCase();
+      
+      const storageKey = `fraction_ownership_${walletAddress.toLowerCase()}_${propertyId}`;
+      const storedOwnership = localStorage.getItem(storageKey);
+      
+      let ownedFractions = 0;
+      
+      if (isPrimaryOwner) {
+        ownedFractions = Number(property.availableFractions);
+      } else if (storedOwnership) {
+        ownedFractions = parseInt(storedOwnership);
+      }
+      
+      if (ownedFractions === 0) {
+        const userInput = prompt(`Enter how many fractions of Property #${propertyId} you own:`);
+        if (userInput && !isNaN(parseInt(userInput)) && parseInt(userInput) > 0) {
+          ownedFractions = parseInt(userInput);
+          localStorage.setItem(storageKey, ownedFractions.toString());
+        }
+      }
+      
+      if (ownedFractions > 0) {
+        let pricePerFraction;
+        if (typeof ethers.formatEther === "function") {
+          pricePerFraction = Number(ethers.formatEther(property.pricePerFraction));
+        } else {
+          pricePerFraction = Number(ethers.utils.formatEther(property.pricePerFraction));
+        }
+        
+        const totalFractions = Number(property.totalFractions);
+        const percentageOwned = (ownedFractions / totalFractions) * 100;
+        
+        const newProperty = {
+          id: propertyId.toString(),
+          totalFractions: totalFractions,
+          pricePerFraction: pricePerFraction,
+          ownedFractions: ownedFractions,
+          percentageOwned: percentageOwned,
+          status: ["Pending", "Verified", "Rejected"][property.status] || "Unknown",
+          location: `Property #${propertyId}`,
+          description: `You own ${ownedFractions} of ${totalFractions} fractions`,
+        };
+        
+        const exists = ownedProperties.some(p => p.id === propertyId.toString());
+        
+        if (!exists) {
+          setOwnedProperties([...ownedProperties, newProperty]);
+          toast({
+            title: "Property Added",
+            description: `Property #${propertyId} added to your portfolio with ${ownedFractions} fractions`,
+            variant: "success",
+          });
+        } else {
+          const updated = ownedProperties.map(p => 
+            p.id === propertyId.toString() ? newProperty : p
+          );
+          setOwnedProperties(updated);
+          toast({
+            title: "Property Updated",
+            description: `Property #${propertyId} updated with ${ownedFractions} fractions`,
+            variant: "success",
+          });
+        }
+      } else {
+        toast({
+          title: "No Ownership Found",
+          description: `You don't appear to own any fractions of Property #${propertyId}`,
+          variant: "warning",
+        });
+      }
+    } catch (error) {
+      console.error("Error checking property:", error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to check property",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCheckingProperty(false);
+      setManualPropertyId("");
+    }
   };
-
-  // Submit a new property for verification
-  const submitNewProperty = async () => {
+  
+  const refreshProperties = async () => {
     if (!walletAddress) {
       toast({
         title: "Error",
@@ -263,236 +388,41 @@ export default function InvestmentsPage() {
       });
       return;
     }
-
-    setIsLoading(true);
-    try {
-      // Create contract instance with signer for transactions
-      let provider;
-      let signer;
-      
-      if (typeof ethers.BrowserProvider === "function") {
-        // ethers v6
-        provider = new ethers.BrowserProvider(window.ethereum);
-        signer = await provider.getSigner();
-      } else {
-        // ethers v5
-        provider = new ethers.providers.Web3Provider(window.ethereum);
-        signer = provider.getSigner();
-      }
-      
-      // Get the full ABI from deployment info to ensure all functions are properly defined
-      let fullABI;
-      try {
-        // Try to fetch the full ABI from the backend deployment file
-        const response = await fetch('/api/contract-abi');
-        const data = await response.json();
-        fullABI = data.abi;
-        console.log("Using full ABI from deployment info");
-      } catch (error) {
-        console.warn("Could not fetch full ABI, using simplified ABI:", error);
-        fullABI = CONTRACT_ABI;
-      }
-      
-      const contract = new ethers.Contract(CONTRACT_ADDRESS, fullABI, signer);
-      
-      // Convert pricePerFraction to wei
-      let priceInWei;
-      if (typeof ethers.parseEther === "function") {
-        // ethers v6
-        priceInWei = ethers.parseEther(newPropertyData.pricePerFraction.toString());
-      } else {
-        // ethers v5
-        priceInWei = ethers.utils.parseEther(newPropertyData.pricePerFraction.toString());
-      }
-      
-      toast({
-        title: "Submitting Property",
-        description: "Please confirm the transaction in your wallet...",
-      });
-      
-      // Call the contract function with verification fee
-      const tx = await contract.submitPropertyForVerification(
-        newPropertyData.totalFractions,
-        priceInWei,
-        { value: VERIFICATION_FEE }
-      );
-      
-      toast({
-        title: "Transaction Submitted",
-        description: `Transaction hash: ${tx.hash}`,
-      });
-      
-      // Wait for transaction to be mined
-      const receipt = await tx.wait();
-      
-      // Get the tokenId from event logs
-      let tokenId = null;
-      if (receipt && receipt.logs) {
-        for (const log of receipt.logs) {
-          try {
-            // Try to parse log as PropertySubmitted event
-            const parsedLog = contract.interface.parseLog(log);
-            if (parsedLog && parsedLog.name === "PropertySubmitted") {
-              tokenId = parsedLog.args.tokenId.toString();
-              console.log("Found tokenId in logs:", tokenId);
-              break;
-            }
-          } catch (e) {
-            // Skip logs that aren't the event we're looking for
-            continue;
-          }
-        }
-      }
-      
-      // If we couldn't get the token ID from logs, try to estimate it
-      if (!tokenId) {
-        console.log("Could not find tokenId in transaction logs, trying alternative methods");
-        try {
-          // Method 1: Try nextTokenId and subtract 1 (may fail)
-          try {
-            const nextToken = await contract.nextTokenId();
-            tokenId = (Number(nextToken) - 1).toString();
-            console.log("Estimated tokenId from nextTokenId:", tokenId);
-          } catch (error) {
-            console.warn("Failed to get nextTokenId:", error);
-            
-            // Method 2: Try to get total supply and assume it's the latest token
-            try {
-              const totalSupply = await contract.totalSupply();
-              tokenId = (Number(totalSupply) - 1).toString();
-              console.log("Estimated tokenId from totalSupply:", tokenId);
-            } catch (error) {
-              console.warn("Failed to get totalSupply:", error);
-              
-              // Method 3: Fallback to a basic counter
-              // Just use timestamp as a simple fallback ID
-              tokenId = Date.now().toString();
-              console.log("Using fallback tokenId:", tokenId);
-            }
-          }
-        } catch (error) {
-          console.error("All methods to get tokenId failed:", error);
-          tokenId = "unknown";
-        }
-      }
-      
-      toast({
-        title: "Property Submitted",
-        description: `Your property was submitted${tokenId !== "unknown" ? ` with token ID ${tokenId}` : ""}`,
-      });
-      
-      // Add a small delay before trying to verify the property
-      // This gives the blockchain time to update states
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // For testing purposes, automatically verify the property if we got a token ID
-      if (tokenId !== "unknown") {
-        try {
-          await autoVerifyProperty(contract, tokenId);
-        } catch (error) {
-          console.error("Auto-verification failed:", error);
-          toast({
-            title: "Auto-Verification Failed",
-            description: "Your property was submitted, but auto-verification failed. The property owner will need to verify it.",
-            variant: "warning",
-          });
-        }
-      }
-      
-      // Add the property to the local state
-      const newProperty: OwnedProperty = {
-        id: tokenId || (ownedProperties.length + 1).toString(),
-        totalFractions: newPropertyData.totalFractions,
-        pricePerFraction: newPropertyData.pricePerFraction,
-        ownedFractions: newPropertyData.totalFractions, // Owner gets all fractions initially
-        percentageOwned: 100,
-        status: tokenId !== "unknown" ? "Verified" : "Pending", // Only mark as verified if we could verify it
-        location: newPropertyData.location || `Property #${tokenId || (ownedProperties.length + 1)}`,
-        description: newPropertyData.description || `You own all fractions of this property`,
-      };
-      
-      setOwnedProperties([...ownedProperties, newProperty]);
-      
-      // Reset form
-      setNewPropertyData({
-        totalFractions: 100,
-        pricePerFraction: 0.01,
-        description: "",
-        location: "",
-      });
-    } catch (error: any) {
-      console.error("Error submitting property:", error);
-      toast({
-        title: "Submission Failed",
-        description: error.message || "Failed to submit property",
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Helper function to automatically verify a property for testing
-  const autoVerifyProperty = async (contract: any, tokenId: string) => {
-    try {
-      toast({
-        title: "Auto-Verifying",
-        description: "Automatically verifying property for testing...",
-      });
-      
-      // Call verifyProperty with approve=true
-      const tx = await contract.verifyProperty(tokenId, true);
-      const receipt = await tx.wait();
-      
-      toast({
-        title: "Property Verified",
-        description: `Property #${tokenId} has been automatically verified and is now available in the marketplace`,
-        variant: "success",
-      });
-      
-      return true;
-    } catch (error: any) {
-      console.error("Error auto-verifying property:", error);
-      toast({
-        title: "Verification Failed",
-        description: error.message || "Failed to automatically verify property",
-        variant: "destructive",
-      });
-      return false;
-    }
-  };
-
-  // List fractions for sale
-  const listFractionsForSale = async () => {
-    if (!selectedProperty || fractionsToSell <= 0) return;
     
-    setIsLoading(true);
+    setIsRefreshing(true);
+    toast({
+      title: "Refreshing",
+      description: "Checking blockchain for your properties...",
+    });
+    
     try {
-      // Implementation would depend on contract's sell/list function
-      // This is a placeholder
+      let provider;
+      if (typeof ethers.BrowserProvider === "function") {
+        provider = new ethers.BrowserProvider(window.ethereum);
+      } else {
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+      }
       
+      await fetchOwnedProperties(walletAddress, provider);
+    } catch (error) {
+      console.error("Error refreshing properties:", error);
+      setIsRefreshing(false);
       toast({
-        title: "Fractions Listed",
-        description: `Listed ${fractionsToSell} fractions for sale at ${newPrice} ETH each`,
-      });
-      
-      // Reset form
-      setSelectedProperty(null);
-      setFractionsToSell(0);
-      setNewPrice(0);
-      
-    } catch (error: any) {
-      toast({
-        title: "Listing Failed",
-        description: error.message || "Failed to list fractions for sale",
+        title: "Refresh Failed",
+        description: "Failed to refresh properties. Try connecting your wallet again.",
         variant: "destructive",
       });
-    } finally {
-      setIsLoading(false);
     }
   };
 
-  // Go to marketplace
+  const loadSampleInvestments = () => {
+    setOwnedProperties(SAMPLE_INVESTMENTS);
+    toast({
+      title: "Sample Data Loaded",
+      description: "Loaded sample investment data for testing",
+    });
+  };
+
   const goToMarketplace = () => {
     router.push("/marketplace");
   };
@@ -507,25 +437,96 @@ export default function InvestmentsPage() {
             {!walletAddress ? (
               <Button onClick={connectWallet}>Connect Wallet</Button>
             ) : (
-              <Button variant="outline" className="text-xs">
-                {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
-              </Button>
+              <div className="flex gap-2">
+                <Button 
+                  onClick={refreshProperties} 
+                  variant="outline" 
+                  disabled={isRefreshing}
+                >
+                  {isRefreshing ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Refreshing
+                    </>
+                  ) : (
+                    "Refresh Properties"
+                  )}
+                </Button>
+                <Button variant="outline" className="text-xs">
+                  {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
+                </Button>
+              </div>
             )}
           </div>
         </div>
 
         {isLoading ? (
-          <div className="text-center my-12">Loading your investments...</div>
+          <div className="text-center my-12">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+            <p>Loading your investments...</p>
+          </div>
         ) : walletAddress ? (
           <>
-            {/* Add Sample Data button for testing */}
-            {process.env.NODE_ENV !== 'production' && ownedProperties.length === 0 && (
-              <div className="mb-4">
+            {process.env.NODE_ENV !== 'production' && (
+              <div className="mb-4 flex gap-2">
                 <Button onClick={loadSampleInvestments} variant="outline">
                   Load Sample Investments
                 </Button>
+                <Button 
+                  onClick={() => {
+                    console.log("Current state:", {
+                      walletAddress,
+                      ownedProperties,
+                      CONTRACT_ADDRESS,
+                      COMPATIBLE_ABI
+                    });
+                    toast({
+                      title: "Debug Info Logged",
+                      description: "Check browser console for detailed state information",
+                    });
+                  }} 
+                  variant="outline"
+                >
+                  Log Debug Info
+                </Button>
               </div>
             )}
+
+            <Card className="mb-8">
+              <CardHeader>
+                <CardTitle>Property Lookup</CardTitle>
+                <CardDescription>
+                  Manually check a property you own by ID
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    placeholder="Enter property ID (e.g. 3)"
+                    value={manualPropertyId}
+                    onChange={(e) => setManualPropertyId(e.target.value)}
+                  />
+                  <Button 
+                    onClick={checkPropertyById}
+                    disabled={isCheckingProperty || !manualPropertyId}
+                  >
+                    {isCheckingProperty ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Checking
+                      </>
+                    ) : (
+                      "Check Property"
+                    )}
+                  </Button>
+                </div>
+                <p className="text-sm text-muted-foreground mt-2">
+                  If you know you own fractions of a property, enter its ID above to add it to your portfolio
+                </p>
+              </CardContent>
+            </Card>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12">
               <Card>
@@ -621,7 +622,7 @@ export default function InvestmentsPage() {
                   </div>
                 </CardContent>
                 <CardFooter>
-                  <Button onClick={submitNewProperty} className="w-full" disabled={isLoading}>
+                  <Button className="w-full" disabled={isLoading}>
                     Submit Property
                   </Button>
                 </CardFooter>
@@ -674,7 +675,6 @@ export default function InvestmentsPage() {
                 <CardFooter className="flex justify-between">
                   <Button variant="outline" onClick={() => setSelectedProperty(null)}>Cancel</Button>
                   <Button 
-                    onClick={listFractionsForSale} 
                     disabled={fractionsToSell <= 0 || newPrice <= 0 || isLoading}
                   >
                     List for Sale

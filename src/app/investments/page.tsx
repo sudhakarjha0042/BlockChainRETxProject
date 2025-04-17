@@ -20,7 +20,10 @@ const COMPATIBLE_ABI = [
   "function submitPropertyForVerification(uint256 _totalFractions, uint256 _pricePerFraction) external payable",
   "function verifyProperty(uint256 tokenId, bool approve) external",
   "function nextTokenId() external view returns (uint256)",
-  "function getAllListings() external view returns (tuple(uint256 tokenId, address owner, uint256 totalFractions, uint256 pricePerFraction, uint256 availableFractions, uint8 status)[] memory)"
+  "function getAllListings() external view returns (tuple(uint256 tokenId, address owner, uint256 totalFractions, uint256 pricePerFraction, uint256 availableFractions, uint8 status)[] memory)",
+  "function listFractionsForSale(uint256 _tokenId, uint256 _fractions, uint256 _pricePerFraction) external",
+  "function getPropertyResaleOfferings(uint256 _tokenId) external view returns (tuple(address seller, uint256 fractions, uint256 pricePerFraction)[] memory)",
+  "function cancelResaleListing(uint256 _tokenId) external"
 ];
 
 const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
@@ -58,6 +61,12 @@ interface OwnedProperty {
   status: string;
   location?: string;
   description?: string;
+  originalPurchasePrice?: number;
+  resaleHistory?: {
+    date: string;
+    price: number;
+    quantity: number;
+  }[];
 }
 
 export default function InvestmentsPage() {
@@ -76,6 +85,8 @@ export default function InvestmentsPage() {
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [manualPropertyId, setManualPropertyId] = React.useState("");
   const [isCheckingProperty, setIsCheckingProperty] = React.useState(false);
+  const [viewMode, setViewMode] = React.useState<"details" | "resell" | null>(null);
+  const [resaleHistory, setResaleHistory] = React.useState<any[]>([]);
   const { toast } = useToast();
   const router = useRouter();
 
@@ -649,86 +660,253 @@ export default function InvestmentsPage() {
       return false;
     }
   };
-  
-  // Helper function to extract token ID from transaction receipt
-  const extractTokenIdFromReceipt = async (receipt: any, contract: any): Promise<string> => {
-    if (!receipt || !receipt.logs) return "unknown";
+
+    // Helper function to extract token ID from transaction receipt
+    const extractTokenIdFromReceipt = async (receipt: any, contract: any): Promise<string> => {
+      if (!receipt || !receipt.logs) return "unknown";
+      
+      try {
+        // Look for PropertySubmitted or Transfer events
+        for (const log of receipt.logs) {
+          try {
+            const parsedLog = contract.interface.parseLog(log);
+            if (!parsedLog) continue;
+            
+            if (parsedLog.name === "PropertySubmitted" && parsedLog.args.tokenId) {
+              return parsedLog.args.tokenId.toString();
+            }
+            
+            if (parsedLog.name === "Transfer" && parsedLog.args.tokenId) {
+              return parsedLog.args.tokenId.toString();
+            }
+          } catch (e) {
+            continue; // Skip logs that can't be parsed
+          }
+        }
+        
+        // If we've reached here, no matching event was found
+        console.warn("Could not find tokenId in transaction logs");
+        return "unknown";
+      } catch (error) {
+        console.error("Error extracting token ID from receipt:", error);
+        return "unknown";
+      }
+    };
+    
+    // Helper function to get the latest token ID
+    const getLatestTokenId = async (contract: any, provider: any): Promise<string> => {
+      try {
+        console.log("Trying alternative methods to determine token ID");
+        
+        // Method 1: Try nextTokenId if available
+        try {
+          const nextToken = await contract.nextTokenId();
+          const tokenId = (Number(nextToken) - 1).toString();
+          console.log("Estimated tokenId from nextTokenId:", tokenId);
+          return tokenId;
+        } catch (error) {
+          console.warn("Failed to get nextTokenId:", error);
+        }
+        
+        // Method 2: Try totalSupply
+        try {
+          const totalSupply = await contract.totalSupply();
+          const tokenId = totalSupply.toString();
+          console.log("Estimated tokenId from totalSupply:", tokenId);
+          return tokenId;
+        } catch (error) {
+          console.warn("Failed to get totalSupply:", error);
+        }
+        
+        // Method 3: Check recent events (last block)
+        try {
+          const blockNumber = await provider.getBlockNumber();
+          const events = await contract.queryFilter("Transfer", blockNumber - 10, blockNumber);
+          
+          if (events && events.length > 0) {
+            // Get the most recent Transfer event
+            const latestEvent = events[events.length - 1];
+            const tokenId = latestEvent.args.tokenId.toString();
+            console.log("Found tokenId from recent events:", tokenId);
+            return tokenId;
+          }
+        } catch (error) {
+          console.warn("Failed to check recent events:", error);
+        }
+        
+        // Fallback: Use timestamp as an identifier
+        return Date.now().toString();
+        
+      } catch (error) {
+        console.error("All methods to determine token ID failed:", error);
+        return "unknown";
+      }
+    };
+
+  const simulateListingInLocalStorage = () => {
+    if (!selectedProperty || !walletAddress) return;
+    
+    const storageKey = `fraction_ownership_${walletAddress.toLowerCase()}_${selectedProperty.id}`;
+    const newOwnership = selectedProperty.ownedFractions - fractionsToSell;
+    localStorage.setItem(storageKey, newOwnership.toString());
+    
+    const resaleKey = `resale_listing_${selectedProperty.id}`;
+    const existingResales = JSON.parse(localStorage.getItem(resaleKey) || '[]');
+    
+    const newResaleListing = {
+      seller: walletAddress,
+      fractions: fractionsToSell,
+      pricePerFraction: newPrice,
+      listedDate: new Date().toISOString()
+    };
+    
+    existingResales.push(newResaleListing);
+    localStorage.setItem(resaleKey, JSON.stringify(existingResales));
+    
+    const updatedProperties = ownedProperties.map(prop => {
+      if (prop.id === selectedProperty.id) {
+        return {
+          ...prop,
+          ownedFractions: prop.ownedFractions - fractionsToSell,
+          percentageOwned: ((prop.ownedFractions - fractionsToSell) / prop.totalFractions) * 100
+        };
+      }
+      return prop;
+    });
+    
+    setOwnedProperties(updatedProperties);
+    
+    setSelectedProperty(null);
+    setFractionsToSell(0);
+    setNewPrice(0);
+    
+    toast({
+      title: "Fractions Listed",
+      description: `Successfully listed ${fractionsToSell} fractions of Property #${selectedProperty.id} for sale at ${newPrice} ETH each.`,
+      variant: "success",
+    });
+  };
+
+  const fetchResaleHistory = async (propertyId: string) => {
+    const resaleKey = `resale_listing_${propertyId}`;
+    const localHistory = JSON.parse(localStorage.getItem(resaleKey) || '[]');
     
     try {
-      // Look for PropertySubmitted or Transfer events
-      for (const log of receipt.logs) {
-        try {
-          const parsedLog = contract.interface.parseLog(log);
-          if (!parsedLog) continue;
-          
-          if (parsedLog.name === "PropertySubmitted" && parsedLog.args.tokenId) {
-            return parsedLog.args.tokenId.toString();
-          }
-          
-          if (parsedLog.name === "Transfer" && parsedLog.args.tokenId) {
-            return parsedLog.args.tokenId.toString();
-          }
-        } catch (e) {
-          continue; // Skip logs that can't be parsed
+      if (window.ethereum) {
+        let provider;
+        if (typeof ethers.BrowserProvider === "function") {
+          provider = new ethers.BrowserProvider(window.ethereum);
+        } else {
+          provider = new ethers.providers.Web3Provider(window.ethereum);
         }
-      }
-      
-      // If we've reached here, no matching event was found
-      console.warn("Could not find tokenId in transaction logs");
-      return "unknown";
-    } catch (error) {
-      console.error("Error extracting token ID from receipt:", error);
-      return "unknown";
-    }
-  };
-  
-  // Helper function to get the latest token ID
-  const getLatestTokenId = async (contract: any, provider: any): Promise<string> => {
-    try {
-      console.log("Trying alternative methods to determine token ID");
-      
-      // Method 1: Try nextTokenId if available
-      try {
-        const nextToken = await contract.nextTokenId();
-        const tokenId = (Number(nextToken) - 1).toString();
-        console.log("Estimated tokenId from nextTokenId:", tokenId);
-        return tokenId;
-      } catch (error) {
-        console.warn("Failed to get nextTokenId:", error);
-      }
-      
-      // Method 2: Try totalSupply
-      try {
-        const totalSupply = await contract.totalSupply();
-        const tokenId = totalSupply.toString();
-        console.log("Estimated tokenId from totalSupply:", tokenId);
-        return tokenId;
-      } catch (error) {
-        console.warn("Failed to get totalSupply:", error);
-      }
-      
-      // Method 3: Check recent events (last block)
-      try {
-        const blockNumber = await provider.getBlockNumber();
-        const events = await contract.queryFilter("Transfer", blockNumber - 10, blockNumber);
         
-        if (events && events.length > 0) {
-          // Get the most recent Transfer event
-          const latestEvent = events[events.length - 1];
-          const tokenId = latestEvent.args.tokenId.toString();
-          console.log("Found tokenId from recent events:", tokenId);
-          return tokenId;
+        const contract = new ethers.Contract(CONTRACT_ADDRESS, [
+          ...COMPATIBLE_ABI,
+          "function getResaleHistory(uint256 _tokenId) external view returns (tuple(address seller, uint256 fractions, uint256 pricePerFraction, uint256 timestamp)[] memory)"
+        ], provider);
+        
+        try {
+          const history = await contract.getResaleHistory(propertyId);
+          if (history && history.length > 0) {
+            return history.map((item: any) => ({
+              seller: item.seller,
+              fractions: Number(item.fractions),
+              pricePerFraction: typeof ethers.formatEther === "function" 
+                ? Number(ethers.formatEther(item.pricePerFraction)) 
+                : Number(ethers.utils.formatEther(item.pricePerFraction)),
+              date: new Date(Number(item.timestamp) * 1000).toLocaleDateString()
+            }));
+          }
+        } catch (error) {
+          console.log("Contract doesn't support getResaleHistory, using localStorage");
         }
-      } catch (error) {
-        console.warn("Failed to check recent events:", error);
+      }
+    } catch (error) {
+      console.error("Error fetching resale history:", error);
+    }
+    
+    return localHistory.map((item: any) => ({
+      seller: item.seller,
+      fractions: Number(item.fractions),
+      pricePerFraction: Number(item.pricePerFraction),
+      date: new Date(item.listedDate).toLocaleDateString()
+    }));
+  };
+
+  const cancelResaleListing = async () => {
+    if (!selectedProperty || !walletAddress) return;
+    
+    setIsLoading(true);
+    try {
+      let provider;
+      let signer;
+      
+      if (typeof ethers.BrowserProvider === "function") {
+        provider = new ethers.BrowserProvider(window.ethereum);
+        signer = await provider.getSigner();
+      } else {
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+        signer = provider.getSigner();
       }
       
-      // Fallback: Use timestamp as an identifier
-      return Date.now().toString();
+      const expandedABI = [
+        ...COMPATIBLE_ABI, 
+        "function cancelResaleListing(uint256 _tokenId) external"
+      ];
+      
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, expandedABI, signer);
+      
+      try {
+        const tx = await contract.cancelResaleListing(selectedProperty.id);
+        await tx.wait();
+        
+        toast({
+          title: "Listing Cancelled",
+          description: `Your resale listing for Property #${selectedProperty.id} has been cancelled.`,
+          variant: "success",
+        });
+      } catch (error) {
+        console.warn("Contract doesn't support cancelResaleListing, using localStorage");
+        
+        const storageKey = `fraction_ownership_${walletAddress.toLowerCase()}_${selectedProperty.id}`;
+        const currentOwnership = parseInt(localStorage.getItem(storageKey) || "0");
+        const resaleKey = `resale_listing_${selectedProperty.id}`;
+        
+        const resaleListings = JSON.parse(localStorage.getItem(resaleKey) || "[]");
+        const userListings = resaleListings.filter((listing: any) => 
+          listing.seller.toLowerCase() === walletAddress.toLowerCase()
+        );
+        
+        const totalFractionsToReturn = userListings.reduce((total: number, listing: any) => 
+          total + Number(listing.fractions), 0
+        );
+        
+        localStorage.setItem(storageKey, (currentOwnership + totalFractionsToReturn).toString());
+        
+        const updatedListings = resaleListings.filter((listing: any) => 
+          listing.seller.toLowerCase() !== walletAddress.toLowerCase()
+        );
+        localStorage.setItem(resaleKey, JSON.stringify(updatedListings));
+        
+        toast({
+          title: "Listing Cancelled",
+          description: `Your resale listing for Property #${selectedProperty.id} has been cancelled (simulated).`,
+          variant: "success",
+        });
+      }
+      
+      refreshProperties();
       
     } catch (error) {
-      console.error("All methods to determine token ID failed:", error);
-      return "unknown";
+      console.error("Error cancelling resale listing:", error);
+      toast({
+        title: "Error",
+        description: "Failed to cancel resale listing",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+      setSelectedProperty(null);
     }
   };
 
@@ -748,7 +926,6 @@ export default function InvestmentsPage() {
         signer = provider.getSigner();
       }
       
-      // Expanded ABI to include listFractionsForSale function
       const expandedABI = [
         ...COMPATIBLE_ABI,
         "function listFractionsForSale(uint256 _tokenId, uint256 _fractions, uint256 _pricePerFraction) external"
@@ -768,7 +945,6 @@ export default function InvestmentsPage() {
         description: "Please confirm the transaction in your wallet...",
       });
       
-      // Call the contract to list fractions
       const tx = await contract.listFractionsForSale(
         selectedProperty.id, 
         fractionsToSell,
@@ -782,7 +958,6 @@ export default function InvestmentsPage() {
       
       const receipt = await tx.wait();
       
-      // Update the local state to reflect the changes
       const updatedProperties = ownedProperties.map(prop => {
         if (prop.id === selectedProperty.id) {
           return {
@@ -796,12 +971,10 @@ export default function InvestmentsPage() {
       
       setOwnedProperties(updatedProperties);
       
-      // Update localStorage to reflect the listing
       const storageKey = `fraction_ownership_${walletAddress.toLowerCase()}_${selectedProperty.id}`;
       const newOwnership = selectedProperty.ownedFractions - fractionsToSell;
       localStorage.setItem(storageKey, newOwnership.toString());
       
-      // Close the listing modal and reset values
       setSelectedProperty(null);
       setFractionsToSell(0);
       setNewPrice(0);
@@ -815,7 +988,6 @@ export default function InvestmentsPage() {
     } catch (error: any) {
       console.error("Error listing fractions for sale:", error);
       
-      // Check if the contract doesn't have the function and provide alternative solution
       if (error.message && error.message.includes("unrecognized-selector")) {
         toast({
           title: "Contract Limitation",
@@ -823,7 +995,6 @@ export default function InvestmentsPage() {
           variant: "warning",
         });
         
-        // Simulate listing with local storage only
         simulateListingInLocalStorage();
       } else {
         toast({
@@ -836,7 +1007,7 @@ export default function InvestmentsPage() {
       setIsLoading(false);
     }
   };
-  
+
   return (
     <div className="min-h-screen bg-background p-6">
       <div className="max-w-7xl mx-auto">
@@ -953,7 +1124,12 @@ export default function InvestmentsPage() {
                         <div 
                           key={property.id}
                           className="p-4 border rounded-lg cursor-pointer hover:bg-slate-50"
-                          onClick={() => setSelectedProperty(property)}
+                          onClick={() => {
+                            setSelectedProperty(property);
+                            fetchResaleHistory(property.id).then(history => {
+                              setResaleHistory(history);
+                            });
+                          }}
                         >
                           <div className="flex justify-between">
                             <div>
@@ -1047,6 +1223,182 @@ export default function InvestmentsPage() {
           <div className="text-center py-12">
             <p className="mb-4">Connect your wallet to see your investments</p>
             <Button onClick={connectWallet}>Connect Wallet</Button>
+          </div>
+        )}
+
+        {selectedProperty && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-2xl font-bold">
+                    {selectedProperty.location || `Property #${selectedProperty.id}`}
+                  </h2>
+                  <Button variant="ghost" onClick={() => {
+                    setSelectedProperty(null);
+                    setViewMode(null);
+                    setFractionsToSell(0);
+                    setNewPrice(0);
+                  }}>×</Button>
+                </div>
+                
+                {viewMode === null && (
+                  <>
+                    <div className="grid grid-cols-2 gap-4 mb-6">
+                      <div>
+                        <p className="text-sm text-gray-500">Total Fractions</p>
+                        <p className="font-medium">{selectedProperty.totalFractions}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Owned Fractions</p>
+                        <p className="font-medium">{selectedProperty.ownedFractions}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Price Per Fraction</p>
+                        <p className="font-medium">{selectedProperty.pricePerFraction} ETH</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Status</p>
+                        <p className="font-medium">{selectedProperty.status}</p>
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-2 justify-center mb-4">
+                      <Button onClick={() => setViewMode("details")}>View Details</Button>
+                      <Button 
+                        onClick={() => setViewMode("resell")}
+                        disabled={selectedProperty.ownedFractions === 0}
+                      >
+                        Resell Fractions
+                      </Button>
+                    </div>
+                  </>
+                )}
+                
+                {viewMode === "details" && (
+                  <>
+                    <div className="mb-6">
+                      <h3 className="font-semibold mb-2">Property Details</h3>
+                      <p>{selectedProperty.description}</p>
+                      <p className="mt-2">You own {selectedProperty.percentageOwned.toFixed(2)}% of this property.</p>
+                    </div>
+                    
+                    <div className="mb-6">
+                      <h3 className="font-semibold mb-2">Resale History</h3>
+                      {resaleHistory.length > 0 ? (
+                        <div className="border rounded-lg overflow-hidden">
+                          <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
+                              </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                              {resaleHistory.map((item, index) => (
+                                <tr key={index}>
+                                  <td className="px-6 py-4 whitespace-nowrap text-sm">{item.date}</td>
+                                  <td className="px-6 py-4 whitespace-nowrap text-sm">{item.pricePerFraction} ETH</td>
+                                  <td className="px-6 py-4 whitespace-nowrap text-sm">{item.fractions}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <p className="text-gray-500">No resale history available for this property.</p>
+                      )}
+                    </div>
+                    
+                    <Button onClick={() => setViewMode(null)} className="w-full">Back</Button>
+                  </>
+                )}
+                
+                {viewMode === "resell" && (
+                  <>
+                    <div className="space-y-4 mb-6">
+                      <div className="space-y-2">
+                        <Label htmlFor="fractionsToSell">Fractions to Sell</Label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            id="fractionsToSell"
+                            type="number"
+                            min="1"
+                            max={selectedProperty.ownedFractions}
+                            value={fractionsToSell}
+                            onChange={(e) => setFractionsToSell(parseInt(e.target.value) || 0)}
+                          />
+                          <span className="text-sm text-gray-500">
+                            Max: {selectedProperty.ownedFractions}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label htmlFor="newPrice">Price per Fraction (ETH)</Label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            id="newPrice"
+                            type="number"
+                            min="0.000001"
+                            step="0.000001"
+                            value={newPrice}
+                            onChange={(e) => setNewPrice(parseFloat(e.target.value) || 0)}
+                          />
+                          <span className="text-sm text-gray-500">
+                            Original: {selectedProperty.pricePerFraction} ETH
+                          </span>
+                        </div>
+                        
+                        {newPrice > 0 && fractionsToSell > 0 && (
+                          <div className="text-sm mt-2">
+                            <p>Total value: {(newPrice * fractionsToSell).toFixed(6)} ETH</p>
+                            {newPrice > selectedProperty.pricePerFraction && (
+                              <p className="text-green-600">
+                                Profit: {((newPrice - selectedProperty.pricePerFraction) * fractionsToSell).toFixed(6)} ETH
+                                ({(((newPrice / selectedProperty.pricePerFraction) - 1) * 100).toFixed(2)}%)
+                              </p>
+                            )}
+                            {newPrice < selectedProperty.pricePerFraction && (
+                              <p className="text-red-600">
+                                Loss: {((selectedProperty.pricePerFraction - newPrice) * fractionsToSell).toFixed(6)} ETH
+                                ({(((1 - (newPrice / selectedProperty.pricePerFraction)) * 100)).toFixed(2)}%)
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => setViewMode(null)}
+                        className="flex-1"
+                      >
+                        Cancel
+                      </Button>
+                      
+                      <Button
+                        onClick={listFractionsForSale}
+                        disabled={!fractionsToSell || !newPrice || isLoading || fractionsToSell > selectedProperty.ownedFractions}
+                        className="flex-1"
+                      >
+                        {isLoading ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Listing...
+                          </>
+                        ) : (
+                          "List for Sale"
+                        )}
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>

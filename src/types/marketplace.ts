@@ -2,7 +2,7 @@ export type PropertyType = 'Land' | 'Commercial' | 'House';
 
 export interface Property {
   id: string;
-  image: string;
+  image?: string;
   estimatedValue: number;
   pricePerNFT: number;
   totalNFTs: number;
@@ -10,8 +10,15 @@ export interface Property {
   location: string;
   type: string;
   description: string;
-  owner?: string; // Address of the property owner
-  availableFractions?: number; // Number of fractions available for sale
+  owner: string;
+  availableFractions: number;
+}
+
+export interface ResaleOffering {
+  seller: string;
+  fractions: number;
+  pricePerFraction: number;
+  listedDate?: string;
 }
 
 export interface FilterState {

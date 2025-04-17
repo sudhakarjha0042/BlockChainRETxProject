@@ -11,29 +11,26 @@ import { ethers } from "ethers";
 import { useToast } from "@/components/ui/use-toast";
 import { useRouter } from "next/navigation";
 
-// Updated ABI to match FractionalNFTMarketplace contract
 const CONTRACT_ABI = [
   "function buyFraction(uint256 _tokenId, uint256 _fractions) external payable",
-  "function getAllListings() external view returns (tuple(uint256 tokenId, address owner, uint256 totalFractions, uint256 pricePerFraction, uint256 availableFractions, uint8 status)[] memory)",
+  "function getAllListings() external view returns (tuple(uint256 tokenId, address owner, uint256 totalFractions, uint256 pricePerFraction, uint256 availableFractions, uint8 status)[] memory)", // Corrected closing parenthesis
   "function properties(uint256) external view returns (uint256 tokenId, address owner, uint256 totalFractions, uint256 pricePerFraction, uint256 availableFractions, uint8 status)",
   "function balanceOf(address owner) external view returns (uint256)",
-  "function ownerOf(uint256 tokenId) external view returns (address)"
+  "function ownerOf(uint256 tokenId) external view returns (address)",
+  "function getPropertyResaleOfferings(uint256 _tokenId) external view returns (tuple(address seller, uint256 fractions, uint256 pricePerFraction)[] memory)"
 ];
 
-// Contract address from backend .env
 const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 
-// Updated property type to match contract structure
 interface BlockchainProperty {
   tokenId: number;
   owner: string;
   totalFractions: number;
   pricePerFraction: number;
   availableFractions: number;
-  status: number; // 0: Pending, 1: Verified, 2: Rejected
+  status: number;
 }
 
-// Sample properties as fallback when blockchain connection fails
 const SAMPLE_PROPERTIES: Property[] = [
   {
     id: "1",
@@ -79,12 +76,12 @@ export default function Marketplace() {
   const [transaction, setTransaction] = React.useState<any>(null);
   const [properties, setProperties] = React.useState<Property[]>(SAMPLE_PROPERTIES);
   const [purchaseQuantity, setPurchaseQuantity] = React.useState<number>(1);
+  const [viewResaleOfferings, setViewResaleOfferings] = React.useState<{[key: string]: any[]}>({});
   const { toast } = useToast();
   const router = useRouter();
 
   const isWalletConnected = !!walletAddress;
 
-  // Improved property fetching with better error handling
   const fetchProperties = React.useCallback(async () => {
     if (!isWalletConnected) return;
 
@@ -105,9 +102,7 @@ export default function Marketplace() {
       
       const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
       
-      // Test contract connection with a simple call first
       try {
-        // Try to get the first property as a test
         await contract.properties(1);
         console.log("Contract connection test successful");
       } catch (testError) {
@@ -115,8 +110,6 @@ export default function Marketplace() {
         throw new Error("Contract connection test failed");
       }
       
-      // Now try to get all listings
-      console.log("Fetching property listings from contract");
       const listings = await contract.getAllListings();
       console.log("Received listings:", listings);
       
@@ -130,8 +123,6 @@ export default function Marketplace() {
         return;
       }
       
-      // Convert blockchain data to Property format
-      console.log("Converting blockchain data to Property format");
       const propertiesFromChain = listings.map((listing: BlockchainProperty) => {
         try {
           const formattedPrice = typeof ethers.formatEther === "function" 
@@ -159,6 +150,37 @@ export default function Marketplace() {
       
       console.log("Converted properties:", propertiesFromChain);
       
+      let propertyResales: {[key: string]: any[]} = {};
+      
+      for (const property of propertiesFromChain) {
+        try {
+          const resaleOfferings = await contract.getPropertyResaleOfferings(property.id);
+          if (resaleOfferings && resaleOfferings.length > 0) {
+            propertyResales[property.id] = resaleOfferings.map((offering: any) => ({
+              seller: offering.seller,
+              fractions: Number(offering.fractions),
+              pricePerFraction: typeof ethers.formatEther === "function" 
+                ? Number(ethers.formatEther(offering.pricePerFraction)) 
+                : Number(ethers.utils.formatEther(offering.pricePerFraction))
+            }));
+          }
+        } catch (error) {
+          console.log(`Contract doesn't support getPropertyResaleOfferings for property #${property.id}, checking localStorage`);
+          
+          const resaleKey = `resale_listing_${property.id}`;
+          const localResales = JSON.parse(localStorage.getItem(resaleKey) || '[]');
+          if (localResales.length > 0) {
+            propertyResales[property.id] = localResales.map((item: any) => ({
+              seller: item.seller,
+              fractions: Number(item.fractions),
+              pricePerFraction: Number(item.pricePerFraction)
+            }));
+          }
+        }
+      }
+      
+      setViewResaleOfferings(propertyResales);
+      
       if (propertiesFromChain && propertiesFromChain.length > 0) {
         setProperties(propertiesFromChain);
         toast({
@@ -180,7 +202,6 @@ export default function Marketplace() {
         variant: "destructive",
       });
       
-      // Suggest using sample data for testing
       toast({
         title: "Tip",
         description: "You can use 'Load Sample Data' to test with sample properties.",
@@ -189,7 +210,120 @@ export default function Marketplace() {
     }
   }, [isWalletConnected, toast]);
 
-  // Connect wallet function by calling a simpler method first
+  const purchaseFromResale = async (propertyId: string, seller: string, quantity: number, pricePerFraction: number) => {
+    if (!isWalletConnected) {
+      setShowWalletConnect(true);
+      return;
+    }
+    
+    setIsTransacting(true);
+    
+    try {
+      let provider;
+      let signer;
+      
+      if (typeof ethers.BrowserProvider === "function") {
+        provider = new ethers.BrowserProvider(window.ethereum);
+        signer = await provider.getSigner();
+      } else {
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+        signer = provider.getSigner();
+      }
+      
+      const extendedABI = [
+        ...CONTRACT_ABI,
+        "function buyResaleFraction(uint256 _tokenId, address _seller, uint256 _fractions) external payable"
+      ];
+      
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, extendedABI, signer);
+      
+      let totalPrice;
+      if (typeof ethers.parseEther === "function") {
+        totalPrice = ethers.parseEther((pricePerFraction * quantity).toString());
+      } else {
+        totalPrice = ethers.utils.parseEther((pricePerFraction * quantity).toString());
+      }
+      
+      try {
+        const tx = await contract.buyResaleFraction(propertyId, seller, quantity, { value: totalPrice });
+        
+        toast({
+          title: "Transaction Submitted",
+          description: `Transaction hash: ${tx.hash}`,
+        });
+        
+        const receipt = await tx.wait();
+        
+        recordPurchase(propertyId, quantity);
+        
+        toast({
+          title: "Purchase Successful!",
+          description: `You have successfully purchased ${quantity} fraction(s) of property #${propertyId} from resale`,
+          variant: "success",
+        });
+      } catch (error) {
+        console.warn("Contract doesn't support buyResaleFraction, using localStorage simulation");
+        
+        simulateResalePurchase(propertyId, seller, quantity, pricePerFraction);
+        
+        toast({
+          title: "Purchase Simulated",
+          description: `Simulated purchase of ${quantity} fraction(s) of property #${propertyId} from resale`,
+          variant: "success",
+        });
+      }
+      
+      fetchProperties();
+      
+    } catch (error) {
+      console.error("Error purchasing from resale:", error);
+      toast({
+        title: "Transaction Failed",
+        description: "Failed to purchase from resale",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTransacting(false);
+    }
+  };
+
+  const simulateResalePurchase = (propertyId: string, seller: string, quantity: number, pricePerFraction: number) => {
+    if (!walletAddress) return;
+    
+    const buyerKey = `fraction_ownership_${walletAddress.toLowerCase()}_${propertyId}`;
+    const buyerOwnership = parseInt(localStorage.getItem(buyerKey) || "0");
+    localStorage.setItem(buyerKey, (buyerOwnership + quantity).toString());
+    
+    const resaleKey = `resale_listing_${propertyId}`;
+    const resaleListings = JSON.parse(localStorage.getItem(resaleKey) || "[]");
+    
+    const updatedListings = resaleListings.map((listing: any) => {
+      if (listing.seller.toLowerCase() === seller.toLowerCase() && 
+          listing.pricePerFraction === pricePerFraction) {
+        return {
+          ...listing,
+          fractions: listing.fractions - quantity
+        };
+      }
+      return listing;
+    }).filter((listing: any) => listing.fractions > 0);
+    
+    localStorage.setItem(resaleKey, JSON.stringify(updatedListings));
+    
+    const historyKey = `transaction_history_${propertyId}`;
+    const history = JSON.parse(localStorage.getItem(historyKey) || "[]");
+    
+    history.push({
+      buyer: walletAddress,
+      seller: seller,
+      fractions: quantity,
+      pricePerFraction: pricePerFraction,
+      timestamp: Date.now()
+    });
+    
+    localStorage.setItem(historyKey, JSON.stringify(history));
+  };
+
   const connectWallet = async () => {
     try {
       if (typeof window.ethereum === "undefined") {
@@ -200,15 +334,12 @@ export default function Marketplace() {
       let address;
       let provider;
       
-      // For both ethers v5 and v6
       if (typeof ethers.BrowserProvider === "function") {
-        // ethers v6 approach
         provider = new ethers.BrowserProvider(window.ethereum);
         await provider.send("eth_requestAccounts", []);
         const signer = await provider.getSigner();
         address = await signer.getAddress();
       } else {
-        // ethers v5 approach
         provider = new ethers.providers.Web3Provider(window.ethereum);
         await provider.send("eth_requestAccounts", []);
         const signer = provider.getSigner();
@@ -219,7 +350,6 @@ export default function Marketplace() {
       setWalletError("");
       console.log("Wallet connected:", address);
       
-      // Close modal if it was open
       if (showWalletConnect) {
         setShowWalletConnect(false);
       }
@@ -229,45 +359,36 @@ export default function Marketplace() {
     }
   };
 
-  // Call fetchProperties when wallet is connected
   React.useEffect(() => {
     if (isWalletConnected) {
       fetchProperties();
     }
   }, [isWalletConnected, fetchProperties]);
 
-  // Function to purchase property NFTs
   const purchasePropertyNFT = async (property: Property, quantity: number = 1) => {
     if (!property || !isWalletConnected) return;
     setIsTransacting(true);
     
     try {
-      // Get provider and signer
       let provider;
       let signer;
       
       if (typeof ethers.BrowserProvider === "function") {
-        // ethers v6
         provider = new ethers.BrowserProvider(window.ethereum);
         signer = await provider.getSigner();
       } else {
-        // ethers v5
         provider = new ethers.providers.Web3Provider(window.ethereum);
         signer = provider.getSigner();
       }
       
-      // Create contract instance
       const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
       
-      // Calculate price (price per NFT * quantity)
       let totalPrice;
       if (typeof ethers.parseEther === "function") {
-        // ethers v6 approach
         totalPrice = ethers.parseEther(
           (property.pricePerNFT * quantity).toString()
         );
       } else if (ethers.utils && typeof ethers.utils.parseEther === "function") {
-        // ethers v5
         totalPrice = ethers.utils.parseEther(
           (property.pricePerNFT * quantity).toString()
         );
@@ -275,7 +396,6 @@ export default function Marketplace() {
         throw new Error("Unable to use ethers.parseEther or ethers.utils.parseEther");
       }
       
-      // Call the buyFraction function on the contract
       const tx = await contract.buyFraction(property.id, quantity, { value: totalPrice });
       
       toast({
@@ -283,7 +403,6 @@ export default function Marketplace() {
         description: `Transaction hash: ${tx.hash}`,
       });
       
-      // Wait for transaction to be mined
       const receipt = await tx.wait();
       
       setTransaction({
@@ -292,7 +411,6 @@ export default function Marketplace() {
         blockNumber: receipt.blockNumber,
       });
       
-      // Record the purchase in localStorage to help investments page find it
       recordPurchase(property.id, quantity);
       
       toast({
@@ -301,10 +419,8 @@ export default function Marketplace() {
         variant: "success",
       });
       
-      // Refresh properties after purchase
       fetchProperties();
 
-      // Close the property modal
       setSelectedProperty(null);
     } catch (error: any) {
       console.error("Transaction error:", error);
@@ -318,7 +434,6 @@ export default function Marketplace() {
     }
   };
 
-  // Add a function to record purchases in localStorage
   const recordPurchase = (propertyId: string, fractions: number) => {
     if (!walletAddress) return;
     
@@ -330,25 +445,20 @@ export default function Marketplace() {
     console.log(`Recorded purchase of ${fractions} fractions of property #${propertyId}`);
   };
 
-  // Handle buy now action
   const handleBuyNow = () => {
     if (!selectedProperty) return;
     
     if (isWalletConnected) {
-      // Process actual blockchain transaction
       purchasePropertyNFT(selectedProperty, purchaseQuantity);
     } else {
-      // Show wallet connect modal if not connected
       setShowWalletConnect(true);
     }
   };
 
-  // Navigate to investments page
   const goToInvestments = () => {
     router.push("/investments");
   };
 
-  // Enhanced loadSampleData function to provide better feedback
   const loadSampleData = () => {
     setProperties(SAMPLE_PROPERTIES);
     toast({
@@ -360,7 +470,7 @@ export default function Marketplace() {
 
   const filteredProperties = properties.filter((property) => {
     return (
-      property.availableFractions > 0 && // Only show properties with available fractions
+      property.availableFractions > 0 &&
       (!filters.area || property.location.includes(filters.area)) &&
       (filters.propertyTypes.length === 0 || filters.propertyTypes.includes(property.type)) &&
       property.estimatedValue >= filters.priceRange[0] &&
@@ -375,7 +485,6 @@ export default function Marketplace() {
       <SidebarFilters filters={filters} onFilterChange={setFilters} />
       
       <main className="flex-1 overflow-auto relative">
-        {/* Wallet Connection and My Investments Buttons */}
         <div className="absolute top-4 right-4 z-10 flex gap-2">
           {isWalletConnected ? (
             <>
@@ -402,7 +511,6 @@ export default function Marketplace() {
             </div>
           )}
 
-          {/* Add a debug button for loading sample data during development */}
           {process.env.NODE_ENV !== 'production' && (
             <Button onClick={loadSampleData} variant="outline" className="mb-4">
               Load Sample Data
@@ -435,6 +543,12 @@ export default function Marketplace() {
         quantity={purchaseQuantity}
         onQuantityChange={setPurchaseQuantity}
         maxQuantity={selectedProperty?.availableFractions || 0}
+        resaleOfferings={selectedProperty ? viewResaleOfferings[selectedProperty.id] || [] : []}
+        onResalePurchase={(seller, quantity, price) => {
+          if (selectedProperty) {
+            purchaseFromResale(selectedProperty.id, seller, quantity, price);
+          }
+        }}
       />
 
       {showWalletConnect && (

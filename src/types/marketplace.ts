@@ -2,16 +2,19 @@ export type PropertyType = 'Land' | 'Commercial' | 'House';
 
 export interface Property {
   id: string;
-  image: string;
-  estimatedValue: number;
+  name: string; // Added
+  address: string; // Added
+  imageUrl: string; // Added (was 'image' before?)
+  documentUrl: string; // Added
+  estimatedValue: number; // Consider if this should be calculated on the fly
   pricePerNFT: number;
   totalNFTs: number;
-  soldNFTs: number;
-  location: string;
-  type: string;
-  description: string;
-  owner?: string; // Address of the property owner
-  availableFractions?: number; // Number of fractions available for sale
+  soldNFTs: number; // Consider if this should be calculated on the fly (totalNFTs - availableFractions)
+  location?: string; // Optional: Keep if used for filtering/display alongside address
+  type: string; // e.g., "Fractional NFT"
+  description?: string; // Optional: Can be generated dynamically
+  owner: string;
+  availableFractions: number;
 }
 
 export interface FilterState {

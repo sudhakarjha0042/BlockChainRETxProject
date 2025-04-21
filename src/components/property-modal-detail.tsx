@@ -1,19 +1,21 @@
 'use client'
 
-import { Property } from "@/types/marketplace";
+import * as React from "react";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { X } from "lucide-react";
-import { ethers } from "ethers";
+import { Property } from "@/types/marketplace";
+import { Loader2 } from "lucide-react";
+
+// Helper to convert IPFS URL to HTTP Gateway URL (same as in PropertyCard)
+const ipfsToGatewayUrl = (ipfsUrl: string): string => {
+    if (!ipfsUrl || !ipfsUrl.startsWith('ipfs://')) {
+        return ipfsUrl || '/placeholder-image.png';
+    }
+    const hash = ipfsUrl.substring(7);
+    return `https://gateway.pinata.cloud/ipfs/${hash}`;
+};
 
 interface PropertyDetailModalProps {
   property: Property | null;
@@ -23,7 +25,7 @@ interface PropertyDetailModalProps {
   walletConnected: boolean;
   isTransacting: boolean;
   quantity: number;
-  onQuantityChange: (quantity: number) => void;
+  onQuantityChange: (value: number) => void;
   maxQuantity: number;
 }
 
@@ -36,127 +38,107 @@ export function PropertyDetailModal({
   isTransacting,
   quantity,
   onQuantityChange,
-  maxQuantity
+  maxQuantity,
 }: PropertyDetailModalProps) {
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      maximumFractionDigits: 0,
-    }).format(value);
+  if (!property) return null;
+
+  const displayImageUrl = ipfsToGatewayUrl(property.imageUrl);
+  const displayDocumentUrl = ipfsToGatewayUrl(property.documentUrl); // Also convert doc URL if needed, or link directly if gateway handles it
+
+  const handleQuantityChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = parseInt(e.target.value);
+    if (isNaN(value) || value < 1) {
+      value = 1;
+    } else if (value > maxQuantity) {
+      value = maxQuantity;
+    }
+    onQuantityChange(value);
   };
 
-  // Calculate total cost
-  const totalCost = property ? quantity * property.pricePerNFT : 0;
-
-  // Calculate ownership percentage
-  const ownershipPercentage = property 
-    ? (quantity / property.totalNFTs) * 100 
-    : 0;
-
-  if (!property) return null;
+  const totalCost = (property.pricePerNFT * quantity).toFixed(6); // Calculate total cost
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
-          <DialogTitle>Property Details</DialogTitle>
-          <DialogDescription>
-            Review property information and purchase NFT fractions
-          </DialogDescription>
+          <DialogTitle className="text-2xl">{property.name}</DialogTitle>
+          <DialogDescription>{property.address}</DialogDescription>
         </DialogHeader>
-        <button
-          onClick={onClose}
-          className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none"
-        >
-          <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
-        </button>
-
         <div className="grid gap-4 py-4">
-          <div>
+          <div className="flex justify-center mb-4">
             <img
-              src={property.image}
-              alt={property.location}
-              className="rounded-lg h-48 w-full object-cover"
+              src={displayImageUrl}
+              alt={property.name}
+              className="max-w-full h-64 object-contain rounded-lg"
+              onError={(e) => {
+                (e.target as HTMLImageElement).src = '/placeholder-image.png';
+              }}
             />
           </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-sm font-medium">Location</p>
-              <p className="text-sm">{property.location}</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium">Type</p>
-              <p className="text-sm">{property.type}</p>
-            </div>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+            <div><span className="font-semibold">Price/Fraction:</span> {property.pricePerNFT.toFixed(4)} ETH</div>
+            <div><span className="font-semibold">Available:</span> {property.availableFractions} / {property.totalNFTs}</div>
+            <div><span className="font-semibold">Owner:</span> {property.owner.slice(0, 8)}...{property.owner.slice(-6)}</div>
+            {/* Add Document Link */}
+            {property.documentUrl && (
+                 <div>
+                    <span className="font-semibold">Document:</span>{' '}
+                    <a
+                        href={displayDocumentUrl} // Use gateway URL or direct IPFS link
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline"
+                    >
+                        View Legal Document
+                    </a>
+                 </div>
+            )}
+            {/* Add more details if needed */}
+            {/* <div><span className="font-semibold">Est. Value:</span> {property.estimatedValue.toLocaleString()} ETH</div> */}
           </div>
 
-          <div>
-            <p className="text-sm font-medium">Description</p>
-            <p className="text-sm">{property.description}</p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-sm font-medium">Estimated Value</p>
-              <p className="text-sm">{formatCurrency(property.estimatedValue)}</p>
+          {/* Purchase Section */}
+          {property.availableFractions > 0 && (
+            <div className="mt-4 border-t pt-4">
+              <h4 className="font-semibold mb-2">Purchase Fractions</h4>
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <Label htmlFor="quantity">Quantity (Max: {maxQuantity})</Label>
+                  <Input
+                    id="quantity"
+                    type="number"
+                    min="1"
+                    max={maxQuantity}
+                    value={quantity}
+                    onChange={handleQuantityChange}
+                    disabled={isTransacting || maxQuantity === 0}
+                  />
+                </div>
+                <div className="text-right mt-5"> {/* Adjusted margin */}
+                   <p className="text-sm">Total Cost:</p>
+                   <p className="font-semibold text-lg">{totalCost} ETH</p>
+                </div>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-medium">Price per NFT</p>
-              <p className="text-sm">{property.pricePerNFT} ETH</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-sm font-medium">Total NFTs</p>
-              <p className="text-sm">{property.totalNFTs}</p>
-            </div>
-            <div>
-              <p className="text-sm font-medium">Available NFTs</p>
-              <p className="text-sm">{property.totalNFTs - property.soldNFTs}</p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="quantity">Quantity (Max: {maxQuantity})</Label>
-            <Input
-              id="quantity"
-              type="number"
-              min="1"
-              max={maxQuantity}
-              value={quantity}
-              onChange={(e) => onQuantityChange(parseInt(e.target.value))}
-              disabled={isTransacting}
-            />
-          </div>
-
-          <div className="bg-slate-50 p-3 rounded-md">
-            <div className="flex justify-between">
-              <p className="text-sm font-medium">Total Cost:</p>
-              <p className="text-sm font-bold">{totalCost.toFixed(4)} ETH</p>
-            </div>
-            <div className="flex justify-between">
-              <p className="text-sm font-medium">Ownership Percentage:</p>
-              <p className="text-sm">{ownershipPercentage.toFixed(2)}%</p>
-            </div>
-          </div>
+          )}
         </div>
-
         <DialogFooter>
-          <Button
-            onClick={onBuyNow}
-            disabled={isTransacting || quantity <= 0 || quantity > maxQuantity}
-            className="w-full"
-          >
-            {isTransacting
-              ? "Processing..."
-              : walletConnected
-              ? `Buy ${quantity} Fraction${quantity > 1 ? "s" : ""}`
-              : "Connect Wallet to Buy"}
-          </Button>
+          {property.availableFractions > 0 ? (
+            walletConnected ? (
+              <Button
+                onClick={onBuyNow}
+                disabled={isTransacting || quantity <= 0 || quantity > maxQuantity}
+                className="w-full"
+              >
+                {isTransacting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {isTransacting ? "Processing..." : `Buy ${quantity} Fraction${quantity > 1 ? 's' : ''}`}
+              </Button>
+            ) : (
+              <Button onClick={onBuyNow} className="w-full">Connect Wallet to Buy</Button> // Button text indicates action needed
+            )
+          ) : (
+             <p className="text-center text-red-600 font-semibold w-full">Sold Out</p>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

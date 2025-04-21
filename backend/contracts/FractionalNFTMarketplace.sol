@@ -11,18 +11,31 @@ contract FractionalNFTMarketplace is ERC721Enumerable, Ownable, ReentrancyGuard 
     struct Property {
         uint256 tokenId;
         address owner;
+        string name;
+        string propertyAddress;
+        string imageUrl;
+        string documentUrl;
         uint256 totalFractions;
         uint256 pricePerFraction;
         uint256 availableFractions;
         VerificationStatus status;
     }
 
-    uint256 public nextTokenId;
+    uint256 public nextTokenId = 1;
     mapping(uint256 => Property) public properties;
     address public verifier;
     uint256 public verificationFee;
 
-    event PropertySubmitted(uint256 indexed tokenId, address indexed owner, uint256 totalFractions, uint256 pricePerFraction);
+    event PropertySubmitted(
+        uint256 indexed tokenId,
+        address indexed owner,
+        string name,
+        string propertyAddress,
+        string imageUrl,
+        string documentUrl,
+        uint256 totalFractions,
+        uint256 pricePerFraction
+    );
     event PropertyVerified(uint256 indexed tokenId);
     event PropertyRejected(uint256 indexed tokenId);
     event FractionBought(uint256 indexed tokenId, address indexed buyer, uint256 fractions, uint256 totalCost);
@@ -53,27 +66,52 @@ contract FractionalNFTMarketplace is ERC721Enumerable, Ownable, ReentrancyGuard 
         emit VerificationFeeUpdated(_newFee);
     }
 
-    function submitPropertyForVerification(uint256 _totalFractions, uint256 _pricePerFraction) external payable nonReentrant {
+    function submitPropertyForVerification(
+        string memory _name,
+        string memory _propertyAddress,
+        string memory _imageUrl,
+        string memory _documentUrl,
+        uint256 _totalFractions,
+        uint256 _pricePerFraction
+    ) external payable nonReentrant {
         require(msg.value == verificationFee, "Marketplace: Incorrect verification fee sent");
         require(_totalFractions > 0, "Marketplace: Total fractions must be positive");
         require(_pricePerFraction > 0, "Marketplace: Price per fraction must be positive");
+        require(bytes(_name).length > 0, "Marketplace: Name cannot be empty");
+        require(bytes(_propertyAddress).length > 0, "Marketplace: Address cannot be empty");
+        require(bytes(_imageUrl).length > 0, "Marketplace: Image URL cannot be empty");
+        require(bytes(_documentUrl).length > 0, "Marketplace: Document URL cannot be empty");
 
         uint256 tokenId = nextTokenId++;
         properties[tokenId] = Property({
             tokenId: tokenId,
             owner: msg.sender,
+            name: _name,
+            propertyAddress: _propertyAddress,
+            imageUrl: _imageUrl,
+            documentUrl: _documentUrl,
             totalFractions: _totalFractions,
             pricePerFraction: _pricePerFraction,
             availableFractions: _totalFractions,
             status: VerificationStatus.Pending
         });
 
-        emit PropertySubmitted(tokenId, msg.sender, _totalFractions, _pricePerFraction);
+        emit PropertySubmitted(
+            tokenId,
+            msg.sender,
+            _name,
+            _propertyAddress,
+            _imageUrl,
+            _documentUrl,
+            _totalFractions,
+            _pricePerFraction
+        );
     }
 
     function verifyProperty(uint256 _tokenId, bool _approve) external onlyVerifier nonReentrant {
         Property storage property = properties[_tokenId];
         require(property.status == VerificationStatus.Pending, "Marketplace: Property not pending verification");
+        require(bytes(property.name).length > 0, "Marketplace: Property does not exist");
 
         if (_approve) {
             property.status = VerificationStatus.Verified;
@@ -91,6 +129,7 @@ contract FractionalNFTMarketplace is ERC721Enumerable, Ownable, ReentrancyGuard 
 
     function buyFraction(uint256 _tokenId, uint256 _fractions) external payable nonReentrant {
         Property storage property = properties[_tokenId];
+        require(bytes(property.name).length > 0, "Marketplace: Property does not exist");
         require(property.status == VerificationStatus.Verified, "Marketplace: Property not verified");
         require(_fractions > 0, "Marketplace: Fractions must be greater than zero");
         require(_fractions <= property.availableFractions, "Marketplace: Not enough fractions listed for sale");
@@ -108,21 +147,30 @@ contract FractionalNFTMarketplace is ERC721Enumerable, Ownable, ReentrancyGuard 
 
     function getAllListings() external view returns (Property[] memory) {
         uint256 verifiedCount = 0;
-        for (uint256 i = 0; i < nextTokenId; i++) {
-            if (properties[i].status == VerificationStatus.Verified) {
+        for (uint256 i = 1; i < nextTokenId; i++) {
+            if (bytes(properties[i].name).length > 0 && properties[i].status == VerificationStatus.Verified) {
                 verifiedCount++;
             }
         }
 
         Property[] memory activeListings = new Property[](verifiedCount);
         uint256 count = 0;
-        for (uint256 i = 0; i < nextTokenId; i++) {
-            if (properties[i].status == VerificationStatus.Verified) {
+        for (uint256 i = 1; i < nextTokenId; i++) {
+            if (bytes(properties[i].name).length > 0 && properties[i].status == VerificationStatus.Verified) {
                 activeListings[count] = properties[i];
                 count++;
             }
         }
 
         return activeListings;
+    }
+
+    function getPropertyDetails(uint256 _tokenId) external view returns (Property memory) {
+        require(bytes(properties[_tokenId].name).length > 0, "Marketplace: Property does not exist");
+        return properties[_tokenId];
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC721Enumerable) returns (bool) {
+        return super.supportsInterface(interfaceId);
     }
 }

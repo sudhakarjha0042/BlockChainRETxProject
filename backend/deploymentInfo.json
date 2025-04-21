@@ -324,6 +324,30 @@
         },
         {
           "indexed": false,
+          "internalType": "string",
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "propertyAddress",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "imageUrl",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "documentUrl",
+          "type": "string"
+        },
+        {
+          "indexed": false,
           "internalType": "uint256",
           "name": "totalFractions",
           "type": "uint256"
@@ -474,6 +498,26 @@
               "type": "address"
             },
             {
+              "internalType": "string",
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "propertyAddress",
+              "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "imageUrl",
+              "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "documentUrl",
+              "type": "string"
+            },
+            {
               "internalType": "uint256",
               "name": "totalFractions",
               "type": "uint256"
@@ -516,6 +560,77 @@
           "internalType": "address",
           "name": "",
           "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "_tokenId",
+          "type": "uint256"
+        }
+      ],
+      "name": "getPropertyDetails",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "uint256",
+              "name": "tokenId",
+              "type": "uint256"
+            },
+            {
+              "internalType": "address",
+              "name": "owner",
+              "type": "address"
+            },
+            {
+              "internalType": "string",
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "propertyAddress",
+              "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "imageUrl",
+              "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "documentUrl",
+              "type": "string"
+            },
+            {
+              "internalType": "uint256",
+              "name": "totalFractions",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint256",
+              "name": "pricePerFraction",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint256",
+              "name": "availableFractions",
+              "type": "uint256"
+            },
+            {
+              "internalType": "enum FractionalNFTMarketplace.VerificationStatus",
+              "name": "status",
+              "type": "uint8"
+            }
+          ],
+          "internalType": "struct FractionalNFTMarketplace.Property",
+          "name": "",
+          "type": "tuple"
         }
       ],
       "stateMutability": "view",
@@ -622,6 +737,26 @@
           "internalType": "address",
           "name": "owner",
           "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "propertyAddress",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "imageUrl",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "documentUrl",
+          "type": "string"
         },
         {
           "internalType": "uint256",
@@ -751,6 +886,26 @@
     },
     {
       "inputs": [
+        {
+          "internalType": "string",
+          "name": "_name",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "_propertyAddress",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "_imageUrl",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "_documentUrl",
+          "type": "string"
+        },
         {
           "internalType": "uint256",
           "name": "_totalFractions",
